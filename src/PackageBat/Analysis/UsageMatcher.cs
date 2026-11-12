@@ -57,8 +57,8 @@ public static class UsageMatcher
                 var newMember = newApi.Resolve(u.TypeName, u.MemberKey);
                 if (newMember == null && oldMember.DeclaringType != u.TypeName && newApi.IsForwarded(oldMember.DeclaringType))
                     continue; // inherited from a base that moved to a dependency, as in ApiDiff.LostInheritance
-                Hit(newMember != null ? ApiDiff.MemberDeprecated(oldMember, newMember)
-                    : ApiDiff.LostInheritance(oldApi, newApi, u.TypeName, oldMember) ?? ApiDiff.MemberMissing(oldMember, newApi), u.Location);
+                var change = oldMember.DeclaringType == u.TypeName ? null : ApiDiff.InheritedMemberChange(oldApi, newApi, u.TypeName, oldMember);
+                Hit(change ?? (newMember != null ? ApiDiff.MemberDeprecated(oldMember, newMember) : ApiDiff.MemberMissing(oldMember, newApi)), u.Location);
                 if (newMember != null && newApi.FindType(oldMember.DeclaringType) is { } nt && oldApi.FindType(oldMember.DeclaringType) is { } ot)
                     Hit(ApiDiff.TypeDeprecated(ot, nt), u.Location, oldMember);
                 continue;

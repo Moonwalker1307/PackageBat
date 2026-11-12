@@ -40,8 +40,7 @@ public static class ApiDiff
             // interfaces changed), code calling them through this type breaks.
             foreach (var baseType in oldApi.Hierarchy(oldType.Name).Skip(1))
                 foreach (var inherited in baseType.Members)
-                    if (LostInheritance(oldApi, newApi, oldType.Name, inherited) is { } lost)
-                        Add(lost);
+                    Add(InheritedMemberChange(oldApi, newApi, oldType.Name, inherited));
 
             added += newType.Members.Count(m => oldApi.Resolve(oldType.Name, m.Key) == null);
         }
@@ -138,6 +137,21 @@ public static class ApiDiff
     }
 
     /// <summary>
+    /// A change to a member that <paramref name="typeName"/> reached by inheritance in the old version,
+    /// seen from <paramref name="typeName"/>: it is gone, or it now resolves to a deprecated declaration
+    /// that its old declaring type doesn't have. Null when nothing changed for this type specifically.
+    /// </summary>
+    public static ApiChange? InheritedMemberChange(ApiSurface oldApi, ApiSurface newApi, string typeName, ApiMember inherited)
+    {
+        if (newApi.Resolve(typeName, inherited.Key) is not { } now)
+            return LostInheritance(oldApi, newApi, typeName, inherited);
+        if (!ReferenceEquals(oldApi.Resolve(typeName, inherited.Key), inherited)
+            || ReferenceEquals(newApi.Resolve(inherited.DeclaringType, inherited.Key), now))
+            return null; // same declaration as from the base: reported there
+        return MemberDeprecated(inherited, now, typeName);
+    }
+
+    /// <summary>
     /// <paramref name="inherited"/> is declared on a base of <paramref name="typeName"/> and still
     /// exists there in the new version, but <paramref name="typeName"/> no longer reaches it.
     /// </summary>
@@ -199,16 +213,22 @@ public static class ApiDiff
         return change;
     }
 
-    public static ApiChange? MemberDeprecated(ApiMember oldMember, ApiMember newMember)
+    /// <param name="viaType">
+    /// The type the member was reached through, when in the new version it resolves
+    /// there to a different declaration than on its old declaring type (for example
+    /// the type now redeclares it), so the deprecation belongs to that type.
+    /// </param>
+    public static ApiChange? MemberDeprecated(ApiMember oldMember, ApiMember newMember, string? viaType = null)
     {
         if (newMember.Deprecated == null || oldMember.Deprecated != null)
             return null;
+        var typeName = viaType ?? oldMember.DeclaringType;
         return new ApiChange
         {
-            Id = $"member-deprecated:{oldMember.DeclaringType}::{oldMember.Key}",
+            Id = $"member-deprecated:{typeName}::{oldMember.Key}",
             Kind = ChangeKind.Deprecated,
             Severity = newMember.Deprecated.IsError ? Severity.Breaking : Severity.Warning,
-            TypeName = oldMember.DeclaringType,
+            TypeName = typeName,
             MemberKey = oldMember.Key,
             Subject = oldMember.Display,
             Description = Deprecated(newMember.Deprecated),
