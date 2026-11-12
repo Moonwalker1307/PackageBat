@@ -55,7 +55,10 @@ public static class UsageMatcher
                     continue;
                 }
                 var newMember = newApi.Resolve(u.TypeName, u.MemberKey);
-                Hit(newMember == null ? ApiDiff.MemberMissing(oldMember, newApi) : ApiDiff.MemberDeprecated(oldMember, newMember), u.Location);
+                if (newMember == null && oldMember.DeclaringType != u.TypeName && newApi.IsForwarded(oldMember.DeclaringType))
+                    continue; // inherited from a base that moved to a dependency, as in ApiDiff.LostInheritance
+                Hit(newMember != null ? ApiDiff.MemberDeprecated(oldMember, newMember)
+                    : ApiDiff.LostInheritance(oldApi, newApi, u.TypeName, oldMember) ?? ApiDiff.MemberMissing(oldMember, newApi), u.Location);
                 if (newMember != null && newApi.FindType(oldMember.DeclaringType) is { } nt && oldApi.FindType(oldMember.DeclaringType) is { } ot)
                     Hit(ApiDiff.TypeDeprecated(ot, nt), u.Location, oldMember);
                 continue;
@@ -77,9 +80,8 @@ public static class UsageMatcher
             if (u.Kind is UsageKind.Inherit or UsageKind.Implement)
             {
                 // Abstract members can be added anywhere up the chain the consumer now has to satisfy.
-                foreach (var t in newApi.Hierarchy(u.TypeName).Select(t => t.Name).ToList())
-                    foreach (var c in ApiDiff.AbstractMembersAdded(oldApi, newApi, t))
-                        Hit(c, u.Location);
+                foreach (var c in ApiDiff.AbstractMembersAdded(oldApi, newApi, u.TypeName))
+                    Hit(c, u.Location);
             }
         }
 

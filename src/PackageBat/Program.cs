@@ -125,9 +125,9 @@ public static class Program
         if (args.Get("old-api") is { } oldApiPath)
         {
             // Language-neutral mode: everything comes from JSON files.
-            var oldApi = ReadJson<ApiSurface>(oldApiPath);
-            var newApi = ReadJson<ApiSurface>(args.Require("new-api"));
-            var usages = ReadJson<UsageSet>(args.Require("usages"));
+            var oldApi = ReadJson<ApiSurface>(oldApiPath, Validation.Check);
+            var newApi = ReadJson<ApiSurface>(args.Require("new-api"), Validation.Check);
+            var usages = ReadJson<UsageSet>(args.Require("usages"), Validation.Check);
             args.EnsureAllUsed();
             report.Scanned.AddRange(usages.Scanned);
             report.Packages.Add(UsageMatcher.Analyze(oldApi, newApi, usages));
@@ -141,7 +141,7 @@ public static class Program
             if (args.Get("base") is { } baseRef)
                 bumps = eco.DetectBumps(opts.RepoRoot, baseRef, args.Get("head") ?? "HEAD").ToList();
             else if (args.Get("bumps") is { } bumpsFile)
-                bumps = ReadJson<List<PackageBump>>(bumpsFile);
+                bumps = ReadJson<List<PackageBump>>(bumpsFile, Validation.Check);
             else
                 bumps = new() { new PackageBump { Ecosystem = eco.Id, Package = args.Require("package"), From = args.Require("from"), To = args.Require("to") } };
             args.EnsureAllUsed();
@@ -200,6 +200,24 @@ public static class Program
         _ => throw new UsageException("--fail-on must be none, breaking, binary or warning."),
     };
 
-    static T ReadJson<T>(string path) =>
-        JsonSerializer.Deserialize<T>(File.ReadAllText(path), Json) ?? throw new UsageException($"{path} is empty.");
+    /// <summary>Reads one of PackageBat's JSON files; anything wrong with it is reported as a usage error, not a crash.</summary>
+    static T ReadJson<T>(string path, Func<T, string?> check)
+    {
+        T value;
+        try
+        {
+            value = JsonSerializer.Deserialize<T>(File.ReadAllText(path), Json) ?? throw new UsageException($"{path} is empty.");
+        }
+        catch (JsonException e)
+        {
+            throw new UsageException($"{path} is not valid PackageBat JSON: {e.Message}");
+        }
+        catch (IOException e)
+        {
+            throw new UsageException($"Could not read {path}: {e.Message}");
+        }
+        if (check(value) is { } problem)
+            throw new UsageException($"{path}: {problem}.");
+        return value;
+    }
 }

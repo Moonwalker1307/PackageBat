@@ -37,14 +37,18 @@ internal static class UsageScanner
                 if (!r.AssemblyReferences.Any(h => packageModules.Contains(r.GetString(r.GetAssemblyReference(h).Name)))) continue;
 
                 MetadataReaderProvider? pdbProvider = null;
+                MetadataReader? pdb = null;
                 try
                 {
                     pe.TryOpenAssociatedPortablePdb(dll, p => File.Exists(p) ? File.OpenRead(p) : null, out pdbProvider, out _);
+                    pdb = pdbProvider?.GetMetadataReader();
                 }
-                catch (Exception e) when (e is BadImageFormatException or IOException) { }
+                catch (Exception e) when (e is IOException || MetadataNames.IsMalformed(e))
+                {
+                    log.WriteLine($"warning: could not read the PDB for {dll} ({e.Message}).");
+                }
                 using (pdbProvider)
                 {
-                    var pdb = pdbProvider?.GetMetadataReader();
                     if (pdb == null)
                         log.WriteLine($"warning: no portable PDB for {dll}; usages will have no file/line.");
                     var before = set.Usages.Count;
@@ -53,7 +57,10 @@ internal static class UsageScanner
                     log.WriteLine($"Scanned {name}: {set.Usages.Count - before} references");
                 }
             }
-            catch (BadImageFormatException) { }
+            catch (Exception e) when (MetadataNames.IsMalformed(e))
+            {
+                log.WriteLine($"warning: skipped {dll}: not a readable .NET assembly ({e.Message}).");
+            }
         }
         return set;
     }
@@ -199,6 +206,8 @@ internal static class UsageScanner
         {
             EntityHandle h;
             try { h = MetadataTokens.EntityHandle(token); } catch (ArgumentException) { return; }
+            // A corrupt body can point at row 0 or past the end of a table.
+            if (h.IsNil || !MetadataTokens.TryGetTableIndex(h.Kind, out var table) || MetadataTokens.GetRowNumber(h) > r.GetTableRowCount(table)) return;
             switch (h.Kind)
             {
                 case HandleKind.MethodSpecification:
@@ -264,9 +273,15 @@ internal static class UsageScanner
             if (_typeCache.TryGetValue(h, out var cached)) return cached;
             string? result = null;
             var u = MetadataNames.UnderlyingType(r, h);
-            if (!u.IsNil && u.Kind == HandleKind.TypeReference
-                && MetadataNames.TargetAssembly(r, (TypeReferenceHandle)u) is { } asm && packageModules.Contains(asm))
-                result = MetadataNames.FullName(r, (TypeReferenceHandle)u);
+            if (!u.IsNil && u.Kind == HandleKind.TypeReference)
+            {
+                // A corrupt signature blob can yield a handle that reports the TypeRef
+                // kind but isn't a real row (System.Reflection.Metadata then refuses the cast).
+                TypeReferenceHandle tr;
+                try { tr = (TypeReferenceHandle)u; } catch (InvalidCastException) { return _typeCache[h] = null; }
+                if (MetadataNames.TargetAssembly(r, tr) is { } asm && packageModules.Contains(asm))
+                    result = MetadataNames.FullName(r, tr);
+            }
             return _typeCache[h] = result;
         }
 

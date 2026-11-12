@@ -94,7 +94,7 @@ internal sealed class NuGetFetcher
         var rest = dash >= 0 ? v[dash..] : "";
         var parts = core.Split('.').ToList();
         while (parts.Count < 3) parts.Add("0");
-        if (parts.Count == 4 && parts[3] == "0") parts.RemoveAt(3);
+        if (parts.Count == 4 && int.TryParse(parts[3], out var revision) && revision == 0) parts.RemoveAt(3); // "1.0.0.00" too
         return string.Join('.', parts.Select(p => int.TryParse(p, out var n) ? n.ToString() : p)) + rest;
     }
 }
