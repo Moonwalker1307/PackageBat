@@ -86,14 +86,16 @@ public static class UsageMatcher
         }
 
         report.UsedApiCount = usedApis.Count;
-        report.Used = hits.Values
-            .Select(h => new UsedChange { Change = h.Change, Locations = Dedupe(h.Locs), MembersUsed = h.Members.ToList() })
-            .OrderBy(u => u.Change.Severity)
-            .ThenByDescending(u => u.Locations.Count)
-            .ThenBy(u => u.Change.Subject, StringComparer.Ordinal)
-            .ToList();
+        report.Used = Rank(hits.Values.Select(h => new UsedChange { Change = h.Change, Locations = Dedupe(h.Locs), MembersUsed = h.Members.ToList() }));
         return report;
     }
+
+    /// <summary>Most severe first, then the most widely used, then by name.</summary>
+    static List<UsedChange> Rank(IEnumerable<UsedChange> used) => used
+        .OrderBy(u => u.Change.Severity)
+        .ThenByDescending(u => u.Locations.Count)
+        .ThenBy(u => u.Change.Subject, StringComparer.Ordinal)
+        .ToList();
 
     static List<SourceLocation> Dedupe(List<SourceLocation> locs)
     {

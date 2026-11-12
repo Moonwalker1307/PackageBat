@@ -153,7 +153,7 @@ internal static class UsageScanner
 
         void ScanSignature(MethodDefinitionHandle mh)
         {
-            MethodSignature<string> sig;
+            MethodSignature<string> sig = default;
             try { sig = r.GetMethodDefinition(mh).DecodeSignature(TypeNameProvider.Key, null); }
             catch (BadImageFormatException) { return; }
             foreach (var t in sig.ParameterTypes.Append(sig.ReturnType).SelectMany(PackageTypesIn).Distinct())
@@ -164,7 +164,7 @@ internal static class UsageScanner
         {
             var md = r.GetMethodDefinition(mh);
             if (md.RelativeVirtualAddress == 0) return;
-            MethodBodyBlock? body;
+            MethodBodyBlock? body = null;
             try { body = _peBody(md.RelativeVirtualAddress); }
             catch (BadImageFormatException) { return; }
             if (body == null) return;
@@ -204,7 +204,7 @@ internal static class UsageScanner
 
         void HandleToken(int token, MethodDefinitionHandle mh, int offset, IReadOnlyList<SequencePoint> points)
         {
-            EntityHandle h;
+            EntityHandle h = default;
             try { h = MetadataTokens.EntityHandle(token); } catch (ArgumentException) { return; }
             // A corrupt body can point at row 0 or past the end of a table.
             if (h.IsNil || !MetadataTokens.TryGetTableIndex(h.Kind, out var table) || MetadataTokens.GetRowNumber(h) > r.GetTableRowCount(table)) return;
@@ -232,7 +232,7 @@ internal static class UsageScanner
                         Emit(tn, null, UsageKind.Type, Locate(points, offset, mh), Symbol(mh));
                     if (h.Kind == HandleKind.TypeSpecification)
                     {
-                        string spec;
+                        string spec = "";
                         try { spec = r.GetTypeSpecification((TypeSpecificationHandle)h).DecodeSignature(TypeNameProvider.Key, null); }
                         catch (BadImageFormatException) { return; }
                         foreach (var t in PackageTypesIn(spec))
@@ -244,7 +244,7 @@ internal static class UsageScanner
 
         IEnumerable<string> PackageTypesInMethodSpec(MethodSpecification ms)
         {
-            System.Collections.Immutable.ImmutableArray<string> args;
+            System.Collections.Immutable.ImmutableArray<string> args = default;
             try { args = ms.DecodeSignature(TypeNameProvider.Key, null); }
             catch (BadImageFormatException) { yield break; }
             foreach (var a in args)
@@ -433,10 +433,12 @@ internal static class UsageScanner
             Array.Fill(TwoByte, OperandType.InlineNone);
             foreach (var f in typeof(OpCodes).GetFields(BindingFlags.Public | BindingFlags.Static))
             {
-                if (f.GetValue(null) is not OpCode op) continue;
-                var v = (ushort)op.Value;
-                if (op.Size == 1) OneByte[v] = op.OperandType;
-                else TwoByte[v & 0xFF] = op.OperandType;
+                if (f.GetValue(null) is OpCode op)
+                {
+                    var v = (ushort)op.Value;
+                    if (op.Size == 1) OneByte[v] = op.OperandType;
+                    else TwoByte[v & 0xFF] = op.OperandType;
+                }
             }
         }
 
