@@ -1,0 +1,32 @@
+# Copy to .github/workflows/packagebat.yml in the repository you want to protect.
+name: Dependency blast radius
+
+on:
+  pull_request:
+    paths:
+      - '**/*.csproj'
+      - '**/*.fsproj'
+      - '**/*.vbproj'
+      - '**/*.props'
+      - '**/*.targets'
+      - '**/packages.config'
+
+permissions:
+  contents: read
+  pull-requests: write   # to post the report as a comment (works for Dependabot PRs too)
+
+jobs:
+  blast-radius:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # needs the base commit to see what changed
+
+      - uses: Moonwalker1307/PackageBat@main
+        with:
+          # project: src/MyApp.sln
+          # dotnet-version: |
+          #   8.0.x
+          #   9.0.x
+          fail-on: breaking   # or 'none' to only comment

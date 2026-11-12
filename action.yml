@@ -1,0 +1,68 @@
+name: PackageBat blast radius
+description: On a dependency bump PR, report which APIs the upgrade changes that your code actually uses, and where.
+author: Moonwalker1307
+branding:
+  icon: package
+  color: purple
+
+inputs:
+  project:
+    description: Solution or project to build (relative to the repo root). Empty builds whatever `dotnet build` finds at the root.
+    default: ''
+  build-args:
+    description: Extra arguments for `dotnet build`, e.g. `-p:Platform=x64`.
+    default: ''
+  dotnet-version:
+    description: .NET SDK version(s) to install, one per line. PackageBat itself needs 8.0 or later; add your own SDK if it differs.
+    default: '8.0.x'
+  base-ref:
+    description: Git revision to compare against. Defaults to the pull request's base commit.
+    default: ''
+  fail-on:
+    description: Fail the check when used API changes reach this level - none, breaking, binary or warning.
+    default: none
+  threshold:
+    description: Only fail when more than this many used API changes reach the fail-on level.
+    default: '0'
+  comment:
+    description: Post (and keep updating) the report as a pull request comment.
+    default: 'true'
+  github-token:
+    description: Token used to comment. Needs `pull-requests: write`.
+    default: ${{ github.token }}
+
+outputs:
+  breaking:
+    description: Number of breaking changes to APIs your code uses.
+    value: ${{ steps.analyze.outputs.breaking }}
+  used-changes:
+    description: Number of changed APIs your code uses, at any severity.
+    value: ${{ steps.analyze.outputs.used }}
+  report:
+    description: Path to the Markdown report.
+    value: ${{ steps.analyze.outputs.report }}
+  report-json:
+    description: Path to the JSON report.
+    value: ${{ steps.analyze.outputs.report-json }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ inputs.dotnet-version }}
+
+    - id: analyze
+      shell: bash
+      env:
+        PB_PROJECT: ${{ inputs.project }}
+        PB_BUILD_ARGS: ${{ inputs.build-args }}
+        PB_BASE: ${{ inputs.base-ref || github.event.pull_request.base.sha }}
+        PB_FAIL_ON: ${{ inputs.fail-on }}
+        PB_THRESHOLD: ${{ inputs.threshold }}
+        PB_COMMENT: ${{ inputs.comment }}
+        PB_PR: ${{ github.event.pull_request.number }}
+        GH_TOKEN: ${{ inputs.github-token }}
+        DOTNET_NOLOGO: '1'
+        DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      run: bash "$GITHUB_ACTION_PATH/action/run.sh"

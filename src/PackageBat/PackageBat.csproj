@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <RollForward>Major</RollForward>
+    <RootNamespace>PackageBat</RootNamespace>
+    <AssemblyName>PackageBat</AssemblyName>
+
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>packagebat</ToolCommandName>
+    <PackageId>PackageBat</PackageId>
+    <Version>0.1.0</Version>
+    <Description>Shows which APIs a dependency upgrade changes that your code actually uses, and where.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="../../README.md" Pack="true" PackagePath="/" />
+    <InternalsVisibleTo Include="PackageBat.Tests" />
+  </ItemGroup>
+
+</Project>
