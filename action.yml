@@ -28,7 +28,7 @@ inputs:
     description: Post (and keep updating) the report as a pull request comment.
     default: 'true'
   github-token:
-    description: Token used to comment. Needs `pull-requests: write`.
+    description: "Token used to comment. Needs `pull-requests: write`."
     default: ${{ github.token }}
 
 outputs:
