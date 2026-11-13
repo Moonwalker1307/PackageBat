@@ -428,3 +428,6 @@ FodyWeavers.xsd
 #*.lscache
 fuzz-findings/
 fuzz-results/
+
+# Stryker.NET mutation testing output
+StrykerOutput/

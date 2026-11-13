@@ -64,7 +64,10 @@ public sealed class ApiSurface
         while (queue.Count > 0)
         {
             var name = queue.Dequeue();
-            if (!seen.Add(name) || FindType(name) is not { } t)
+            if (!seen.Add(name))
+                continue;
+            var t = FindType(name);
+            if (t == null)
                 continue;
             yield return t;
             if (t.BaseType is { } b) queue.Enqueue(b);

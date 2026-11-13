@@ -120,7 +120,8 @@ internal static class ApiExtractor
         foreach (var ph in td.GetProperties())
         {
             var pd = r.GetPropertyDefinition(ph);
-            if (ReadObsolete(r, pd.GetCustomAttributes()) is not { } dep) continue;
+            var dep = ReadObsolete(r, pd.GetCustomAttributes());
+            if (dep == null) continue;
             var acc = pd.GetAccessors();
             foreach (var a in new[] { acc.Getter, acc.Setter }.Where(a => !a.IsNil))
                 MarkAccessor(r, type, a, dep);
@@ -128,7 +129,8 @@ internal static class ApiExtractor
         foreach (var eh in td.GetEvents())
         {
             var ed = r.GetEventDefinition(eh);
-            if (ReadObsolete(r, ed.GetCustomAttributes()) is not { } dep) continue;
+            var dep = ReadObsolete(r, ed.GetCustomAttributes());
+            if (dep == null) continue;
             var acc = ed.GetAccessors();
             foreach (var a in new[] { acc.Adder, acc.Remover }.Where(a => !a.IsNil))
                 MarkAccessor(r, type, a, dep);
