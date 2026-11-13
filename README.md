@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logo.png" alt="PackageBat" width="480">
+  <img src="https://raw.githubusercontent.com/Moonwalker1307/PackageBat/main/assets/logo.png" alt="PackageBat" width="480">
 </p>
 
 <p align="center"><b>Dependabot tells you a new version exists. PackageBat tells you what it breaks in <i>your</i> code.</b></p>
@@ -71,13 +71,13 @@ Outputs: `breaking`, `used-changes`, `report` (Markdown path), `report-json`.
 ## Use it from the command line
 
 ```bash
-dotnet build src/PackageBat -c Release -o ./pb      # (a NuGet tool package will follow)
+dotnet tool install --global PackageBat
 
 # one package, against your built code
-dotnet ./pb/PackageBat.dll analyze --package System.CommandLine --from 2.0.0-beta4.22272.1 --to 2.0.0 --consumer src
+packagebat analyze --package System.CommandLine --from 2.0.0-beta4.22272.1 --to 2.0.0 --consumer src
 
 # whatever changed between two git revisions
-dotnet ./pb/PackageBat.dll analyze --base origin/main --consumer . --markdown report.md --json report.json --fail-on breaking
+packagebat analyze --base origin/main --consumer . --markdown report.md --json report.json --fail-on breaking
 ```
 
 `--consumer` takes built assemblies or folders to search (anything with a `.pdb` next to it, `obj/` skipped). Run `packagebat help` for all options. Exit codes: `0` ok, `1` error, `2` over the `--fail-on` threshold.
