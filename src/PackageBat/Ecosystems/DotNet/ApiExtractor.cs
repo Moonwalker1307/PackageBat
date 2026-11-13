@@ -226,13 +226,9 @@ internal static class ApiExtractor
             var ca = r.GetCustomAttribute(h);
             if (MetadataNames.AttributeTypeName(r, ca) != "System.ObsoleteAttribute") continue;
             var dep = new Deprecation();
-            try
-            {
-                var v = ca.DecodeValue(TypeNameProvider.Key);
-                if (v.FixedArguments.Length > 0) dep.Message = v.FixedArguments[0].Value as string;
-                if (v.FixedArguments.Length > 1 && v.FixedArguments[1].Value is bool b) dep.IsError = b;
-            }
-            catch (BadImageFormatException) { }
+            var args = MetadataNames.ReadStringAndBoolArguments(r, ca);
+            if (args is { Length: > 0 }) dep.Message = args[0] as string;
+            if (args is { Length: > 1 } && args[1] is bool b) dep.IsError = b;
             return dep;
         }
         return null;

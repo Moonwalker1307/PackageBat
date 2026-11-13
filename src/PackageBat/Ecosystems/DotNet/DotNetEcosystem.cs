@@ -55,8 +55,7 @@ public sealed class DotNetEcosystem : IEcosystem
                 {
                     var ca = r.GetCustomAttribute(h);
                     if (MetadataNames.AttributeTypeName(r, ca) != "System.Runtime.Versioning.TargetFrameworkAttribute") continue;
-                    var value = ca.DecodeValue(TypeNameProvider.Key);
-                    if (value.FixedArguments.Length > 0 && FrameworkSelector.FromTargetFrameworkAttribute(value.FixedArguments[0].Value as string) is { } tfm)
+                    if (MetadataNames.ReadStringAndBoolArguments(r, ca) is { Length: > 0 } args && FrameworkSelector.FromTargetFrameworkAttribute(args[0] as string) is { } tfm)
                         return tfm;
                 }
             }

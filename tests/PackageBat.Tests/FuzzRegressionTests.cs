@@ -1,4 +1,5 @@
 using PackageBat.Analysis;
+using PackageBat.Ecosystems.DotNet;
 using PackageBat.Model;
 using Xunit;
 
@@ -97,5 +98,29 @@ public class FuzzRegressionTests
         var api = System.Text.Json.JsonSerializer.Deserialize<ApiSurface>("""{"types":[{"name":"N.A","members":null,"interfaces":null}],"modules":null}""", Program.Json)!;
         Assert.Null(Validation.Check(api));
         Assert.Empty(ApiDiff.Compute(api, api).Changes);
+    }
+
+    [Fact]
+    public void Attribute_with_a_huge_array_length_does_not_exhaust_memory()
+    {
+        // An [Obsolete] whose constructor takes a string[]: the blob says the array has
+        // int.MaxValue elements. CustomAttribute.DecodeValue would try to allocate them all.
+        var dir = Path.Combine(Path.GetTempPath(), "packagebat-tests", Guid.NewGuid().ToString("N"));
+        var dll = Compiler.Compile(dir, "Huge", "1.0.0.0", new[] { ("Lib.cs", """
+            namespace System { public sealed class ObsoleteAttribute : Attribute { public ObsoleteAttribute(string[] a) { } } }
+            namespace N { [System.Obsolete(new[] { "zq" })] public class A { } }
+            """) });
+        var bytes = File.ReadAllBytes(dll);
+        byte[] blob = { 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02, (byte)'z', (byte)'q' }; // prolog, count 1, "zq"
+        var at = bytes.AsSpan().IndexOf(blob);
+        Assert.True(at >= 0, "attribute blob not found");
+        BitConverter.GetBytes(int.MaxValue).CopyTo(bytes, at + 2);
+        File.WriteAllBytes(dll, bytes);
+
+        var api = ApiExtractor.Extract(new[] { dll }, "Huge", "1.0.0", null);
+
+        var type = Assert.Single(api.Types, t => t.Name == "N.A");
+        Assert.NotNull(type.Deprecated); // still recognised as deprecated, just without a message
+        Assert.Null(type.Deprecated!.Message);
     }
 }
