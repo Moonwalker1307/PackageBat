@@ -1,0 +1,118 @@
+name: Security
+
+# Nightly security checks, plus a manual run from the Actions tab.
+#   - vulnerable-packages: fails when any NuGet package (direct or transitive) has a known advisory.
+#   - codeql: static analysis of the C# code; results land in the Security tab under Code scanning.
+#   - workflow-audit: zizmor audit of the workflows and action.yml (this repo ships an Action that
+#     runs on other people's pull requests); results also land in Code scanning.
+# Secret scanning and push protection are already turned on in the repo settings, so they aren't repeated here.
+
+on:
+  schedule:
+    - cron: '17 3 * * *' # 03:17 UTC every night
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  DOTNET_NOLOGO: '1'
+  DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+
+jobs:
+  vulnerable-packages:
+    name: Vulnerable NuGet packages
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: 8.0.x
+      - run: dotnet restore PackageBat.sln
+      - name: Check for known vulnerabilities
+        shell: bash
+        run: |
+          set -euo pipefail
+          # `dotnet list package --vulnerable` exits 0 even when it finds something, so read its JSON instead.
+          dotnet list PackageBat.sln package --vulnerable --include-transitive --format json > vulnerable.json
+          jq -r '
+            .projects[] | (.path | split("/") | last) as $project
+            | .frameworks[]? | .framework as $tfm
+            | ((.topLevelPackages // []) | map(. + {kind: "direct"})) + ((.transitivePackages // []) | map(. + {kind: "transitive"}))
+            | .[] | . as $pkg | .vulnerabilities[]
+            | "| \($project) | \($tfm) | \($pkg.id) \($pkg.resolvedVersion) | \($pkg.kind) | \(.severity) | \(.advisoryurl) |"
+          ' vulnerable.json | sort -u > findings.txt
+
+          if [[ ! -s findings.txt ]]; then
+            echo "No known vulnerable NuGet packages." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          {
+            echo "### Vulnerable NuGet packages"
+            echo
+            echo "| Project | Framework | Package | Reference | Severity | Advisory |"
+            echo "| --- | --- | --- | --- | --- | --- |"
+            cat findings.txt
+          } >> "$GITHUB_STEP_SUMMARY"
+          while IFS='|' read -r _ project tfm pkg kind severity url _; do
+            echo "::error title=Vulnerable package::$(echo "$pkg" | xargs) ($(echo "$kind" | xargs), $(echo "$severity" | xargs)) in $(echo "$project" | xargs) $(echo "$tfm" | xargs): $(echo "$url" | xargs)"
+          done < findings.txt
+          exit 1
+      - name: List deprecated packages
+        if: always()
+        shell: bash
+        # Informational only: deprecated isn't the same as vulnerable, so this never fails the run.
+        run: dotnet list PackageBat.sln package --deprecated --include-transitive || true
+
+  codeql:
+    name: CodeQL (C#)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: 8.0.x
+      - uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          languages: csharp
+          build-mode: manual
+          queries: security-extended
+      - run: dotnet build PackageBat.sln -c Release
+      - uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          category: /language:csharp
+
+  workflow-audit:
+    name: Workflow and action audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Run zizmor
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # zizmor exits non-zero when it has findings; they're reported through Code scanning instead.
+        run: pipx run zizmor==1.32.0 --format sarif .github/workflows action.yml > zizmor.sarif || true
+      - uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          sarif_file: zizmor.sarif
+          category: zizmor
