@@ -1,0 +1,74 @@
+name: Fuzz
+
+# Nightly fuzzing of PackageBat's input-facing code (see tests/PackageBat.Fuzz):
+# corrupted package and consumer assemblies/PDBs, corrupted language-neutral JSON
+# through `packagebat analyze`, small text parsers, and properties of the diff
+# and usage matcher. Normal CI runs the same tests with a tiny budget.
+
+on:
+  schedule:
+    - cron: "17 3 * * *" # 03:17 UTC every night
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: Seconds to fuzz each target
+        required: false
+        default: "120"
+      seed:
+        description: Replay a CsCheck seed from an earlier failure (optional)
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz
+  cancel-in-progress: false
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      FUZZ_SECONDS: ${{ inputs.seconds || '120' }}
+      FUZZ_SEED: ${{ inputs.seed }}
+      FUZZ_OUT: ${{ github.workspace }}/fuzz-findings
+      DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - run: dotnet build tests/PackageBat.Fuzz -c Release
+      # --blame-* turns a hang or a hard crash (stack overflow) into a dump and a
+      # named test instead of a silent timeout.
+      - name: Fuzz
+        run: >
+          dotnet test tests/PackageBat.Fuzz -c Release --no-build
+          --blame-hang-timeout 20m --blame-crash
+          --logger "console;verbosity=normal" --logger "trx;LogFileName=fuzz.trx"
+          --results-directory fuzz-results
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Fuzz run (${FUZZ_SECONDS}s per target${FUZZ_SEED:+, seed $FUZZ_SEED})"
+            echo
+            if [ -d fuzz-findings ] && [ -n "$(ls -A fuzz-findings)" ]; then
+              echo "Inputs that crashed a target (download the **fuzz-findings** artifact to replay them):"
+              echo
+              find fuzz-findings -type f | sort | sed 's/^/- `/; s/$/`/'
+            else
+              echo "No crashes found."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fuzz-findings
+          path: |
+            fuzz-findings/
+            fuzz-results/
+          if-no-files-found: ignore
+          retention-days: 30

@@ -13,33 +13,45 @@ internal static class ApiExtractor
         var surface = new ApiSurface { Ecosystem = "dotnet", Package = package, Version = version, Framework = framework };
         foreach (var path in assemblyPaths)
         {
-            using var stream = File.OpenRead(path);
-            using var pe = new PEReader(stream);
-            if (!pe.HasMetadata) continue;
-            var r = pe.GetMetadataReader();
-            if (!r.IsAssembly) continue;
-            var module = r.GetString(r.GetAssemblyDefinition().Name);
-            if (!surface.Modules.Contains(module)) surface.Modules.Add(module);
-
-            foreach (var th in r.TypeDefinitions)
+            try
             {
-                var td = r.GetTypeDefinition(th);
-                if (IsVisible(r, td))
-                    surface.Types.Add(ReadType(r, th, td, module));
+                ExtractOne(surface, path);
             }
-
-            foreach (var eh in r.ExportedTypes)
+            catch (Exception e) when (e is not BadImageFormatException && MetadataNames.IsMalformed(e))
             {
-                var et = r.GetExportedType(eh);
-                if (et.IsForwarder)
-                {
-                    var ns = r.GetString(et.Namespace);
-                    var name = r.GetString(et.Name);
-                    surface.ForwardedTypes.Add(ns.Length == 0 ? name : ns + "." + name);
-                }
+                throw new BadImageFormatException($"{Path.GetFileName(path)} has malformed metadata: {e.Message}", path, e);
             }
         }
         return surface;
+    }
+
+    static void ExtractOne(ApiSurface surface, string path)
+    {
+        using var stream = File.OpenRead(path);
+        using var pe = new PEReader(stream);
+        if (!pe.HasMetadata) return;
+        var r = pe.GetMetadataReader();
+        if (!r.IsAssembly) return;
+        var module = r.GetString(r.GetAssemblyDefinition().Name);
+        if (!surface.Modules.Contains(module)) surface.Modules.Add(module);
+
+        foreach (var th in r.TypeDefinitions)
+        {
+            var td = r.GetTypeDefinition(th);
+            if (IsVisible(r, td))
+                surface.Types.Add(ReadType(r, th, td, module));
+        }
+
+        foreach (var eh in r.ExportedTypes)
+        {
+            var et = r.GetExportedType(eh);
+            if (et.IsForwarder)
+            {
+                var ns = r.GetString(et.Namespace);
+                var name = r.GetString(et.Name);
+                surface.ForwardedTypes.Add(ns.Length == 0 ? name : ns + "." + name);
+            }
+        }
     }
 
     static ApiType ReadType(MetadataReader r, TypeDefinitionHandle th, TypeDefinition td, string module)
@@ -186,15 +198,19 @@ internal static class ApiExtractor
 
     static bool IsVisible(MetadataReader r, TypeDefinition td)
     {
-        var vis = td.Attributes & TypeAttributes.VisibilityMask;
-        switch (vis)
+        for (int depth = 0; ; depth++)
         {
-            case TypeAttributes.Public: return true;
-            case TypeAttributes.NestedPublic:
-            case TypeAttributes.NestedFamily:
-            case TypeAttributes.NestedFamORAssem:
-                return IsVisible(r, r.GetTypeDefinition(td.GetDeclaringType()));
-            default: return false;
+            if (depth > MetadataNames.MaxDepth) throw MetadataNames.TooDeep("nested types");
+            switch (td.Attributes & TypeAttributes.VisibilityMask)
+            {
+                case TypeAttributes.Public: return true;
+                case TypeAttributes.NestedPublic:
+                case TypeAttributes.NestedFamily:
+                case TypeAttributes.NestedFamORAssem:
+                    td = r.GetTypeDefinition(td.GetDeclaringType());
+                    continue;
+                default: return false;
+            }
         }
     }
 

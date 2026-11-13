@@ -86,23 +86,23 @@ internal static partial class FrameworkSelector
         return null;
     }
 
-    [GeneratedRegex(@"^(net|netcoreapp)(\d+\.\d+)(?:-([a-z]+)[\d.]*)?$")]
+    [GeneratedRegex(@"^(net|netcoreapp)([0-9]+\.[0-9]+)(?:-([a-z]+)[0-9.]*)?$")]
     private static partial Regex NetRegex();
-    [GeneratedRegex(@"^netstandard(\d+\.\d+)$")]
+    [GeneratedRegex(@"^netstandard([0-9]+\.[0-9]+)$")]
     private static partial Regex StandardRegex();
-    [GeneratedRegex(@"^net(\d{2,3})$")]
+    [GeneratedRegex(@"^net([0-9]{2,3})$")]
     private static partial Regex FrameworkRegex();
 
     /// <summary>".NETCoreApp,Version=v8.0" -> "net8.0"; ".NETFramework,Version=v4.7.2" -> "net472".</summary>
     public static string? FromTargetFrameworkAttribute(string? value)
     {
         if (string.IsNullOrEmpty(value)) return null;
-        var m = Regex.Match(value, @"^\.(NETCoreApp|NETStandard|NETFramework),Version=v(\d+(?:\.\d+)*)");
+        var m = Regex.Match(value, @"^\.(NETCoreApp|NETStandard|NETFramework),Version=v([0-9]+(?:\.[0-9]+)*)");
         if (!m.Success) return null;
         var ver = m.Groups[2].Value;
         return m.Groups[1].Value switch
         {
-            "NETCoreApp" => (double.Parse(ver.Split('.')[0]) >= 5 ? "net" : "netcoreapp") + string.Join('.', ver.Split('.').Take(2)),
+            "NETCoreApp" => (double.Parse(ver.Split('.')[0], System.Globalization.CultureInfo.InvariantCulture) >= 5 ? "net" : "netcoreapp") + string.Join('.', ver.Split('.').Take(2)),
             "NETStandard" => "netstandard" + string.Join('.', ver.Split('.').Take(2)),
             _ => "net" + ver.Replace(".", ""),
         };

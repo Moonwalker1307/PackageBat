@@ -50,6 +50,7 @@ public sealed class DotNetEcosystem : IEcosystem
                 using var pe = new PEReader(s);
                 if (!pe.HasMetadata) continue;
                 var r = pe.GetMetadataReader();
+                if (!r.IsAssembly) continue;
                 foreach (var h in r.GetAssemblyDefinition().GetCustomAttributes())
                 {
                     var ca = r.GetCustomAttribute(h);
@@ -59,7 +60,7 @@ public sealed class DotNetEcosystem : IEcosystem
                         return tfm;
                 }
             }
-            catch (BadImageFormatException) { }
+            catch (Exception e) when (e is IOException || MetadataNames.IsMalformed(e)) { }
         }
         return null;
     }

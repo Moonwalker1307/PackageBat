@@ -12,9 +12,11 @@ public static class ApiDiff
         var changes = new Dictionary<string, ApiChange>(StringComparer.Ordinal);
         void Add(ApiChange? c) { if (c != null) changes.TryAdd(c.Id, c); }
 
-        int added = newApi.Types.Count(t => oldApi.FindType(t.Name) == null);
+        // Go through TypeIndex, not Types: if a package defines a type name twice
+        // (two assemblies), every lookup uses the first one, so the diff must too.
+        int added = newApi.TypeIndex.Values.Count(t => oldApi.FindType(t.Name) == null);
 
-        foreach (var oldType in oldApi.Types)
+        foreach (var oldType in oldApi.TypeIndex.Values)
         {
             var newType = newApi.FindType(oldType.Name);
             if (newType == null)
@@ -32,6 +34,13 @@ public static class ApiDiff
                 var newMember = newApi.Resolve(oldType.Name, oldMember.Key);
                 Add(newMember == null ? MemberMissing(oldMember, newApi) : MemberDeprecated(oldMember, newMember));
             }
+
+            // Members the type only inherited from a base in the package: if the base
+            // still has them but this type no longer reaches them (its base type or
+            // interfaces changed), code calling them through this type breaks.
+            foreach (var baseType in oldApi.Hierarchy(oldType.Name).Skip(1))
+                foreach (var inherited in baseType.Members)
+                    Add(InheritedMemberChange(oldApi, newApi, oldType.Name, inherited));
 
             added += newType.Members.Count(m => oldApi.Resolve(oldType.Name, m.Key) == null);
         }
@@ -94,42 +103,88 @@ public static class ApiDiff
         };
     }
 
-    /// <summary>New abstract members on an interface or abstract class break everyone who implements or derives from it.</summary>
+    /// <summary>
+    /// Abstract members that code deriving from (or implementing) <paramref name="typeName"/>
+    /// must now provide: new abstract members on the type or anywhere up its new
+    /// hierarchy, including bases and interfaces it did not have before.
+    /// A member added to a base the type already had is reported once, on that base;
+    /// one brought in by a new base or interface is reported on the type itself.
+    /// </summary>
     public static IEnumerable<ApiChange> AbstractMembersAdded(ApiSurface oldApi, ApiSurface newApi, string typeName)
     {
-        if (newApi.FindType(typeName) is not { } newType)
+        if (newApi.FindType(typeName) == null)
             yield break;
-        foreach (var m in newType.Members)
-        {
-            if (!m.IsAbstract || oldApi.Resolve(typeName, m.Key) != null)
-                continue;
-            yield return new ApiChange
+        var oldHierarchy = oldApi.Hierarchy(typeName).Select(t => t.Name).ToHashSet(StringComparer.Ordinal);
+        foreach (var t in newApi.Hierarchy(typeName))
+            foreach (var m in t.Members)
             {
-                Id = $"abstract-added:{typeName}::{m.Key}",
-                Kind = ChangeKind.AbstractMemberAdded,
-                Severity = Severity.Breaking,
-                TypeName = typeName,
-                MemberKey = m.Key,
-                Subject = m.Display,
-                Description = newType.Kind == ApiTypeKind.Interface
-                    ? "New interface member that implementers must provide"
-                    : "New abstract member that derived classes must override",
-            };
-        }
+                if (!m.IsAbstract || oldApi.Resolve(typeName, m.Key) != null || !ReferenceEquals(newApi.Resolve(typeName, m.Key), m))
+                    continue;
+                var owner = oldHierarchy.Contains(t.Name) && oldApi.Resolve(t.Name, m.Key) == null ? t.Name : typeName;
+                yield return new ApiChange
+                {
+                    Id = $"abstract-added:{owner}::{m.Key}",
+                    Kind = ChangeKind.AbstractMemberAdded,
+                    Severity = Severity.Breaking,
+                    TypeName = owner,
+                    MemberKey = m.Key,
+                    Subject = m.Display,
+                    Description = t.Kind == ApiTypeKind.Interface
+                        ? "New interface member that implementers must provide"
+                        : "New abstract member that derived classes must override",
+                };
+            }
     }
 
-    public static ApiChange MemberMissing(ApiMember oldMember, ApiSurface newApi)
+    /// <summary>
+    /// A change to a member that <paramref name="typeName"/> reached by inheritance in the old version,
+    /// seen from <paramref name="typeName"/>: it is gone, or it now resolves to a deprecated declaration
+    /// that its old declaring type doesn't have. Null when nothing changed for this type specifically.
+    /// </summary>
+    public static ApiChange? InheritedMemberChange(ApiSurface oldApi, ApiSurface newApi, string typeName, ApiMember inherited)
     {
+        if (newApi.Resolve(typeName, inherited.Key) is not { } now)
+            return LostInheritance(oldApi, newApi, typeName, inherited);
+        if (!ReferenceEquals(oldApi.Resolve(typeName, inherited.Key), inherited)
+            || ReferenceEquals(newApi.Resolve(inherited.DeclaringType, inherited.Key), now))
+            return null; // same declaration as from the base: reported there
+        return MemberDeprecated(inherited, now, typeName);
+    }
+
+    /// <summary>
+    /// <paramref name="inherited"/> is declared on a base of <paramref name="typeName"/> and still
+    /// exists there in the new version, but <paramref name="typeName"/> no longer reaches it.
+    /// </summary>
+    public static ApiChange? LostInheritance(ApiSurface oldApi, ApiSurface newApi, string typeName, ApiMember inherited)
+    {
+        if (inherited.Kind == ApiMemberKind.Constructor
+            || !ReferenceEquals(oldApi.Resolve(typeName, inherited.Key), inherited) // hidden by a nearer declaration
+            || newApi.FindType(typeName) == null
+            || newApi.Resolve(typeName, inherited.Key) != null
+            || newApi.IsForwarded(inherited.DeclaringType)) // the base moved to a dependency; we can't see it
+            return null;
+        if (newApi.FindType(inherited.DeclaringType) != null && newApi.Resolve(inherited.DeclaringType, inherited.Key) == null)
+            return null; // removed from the base itself: reported there
+        return MemberMissing(inherited, newApi, typeName);
+    }
+
+    /// <param name="viaType">
+    /// The type the member was reached through, when that is not its declaring type
+    /// and the member is only missing from that type (see <see cref="LostInheritance"/>).
+    /// </param>
+    public static ApiChange MemberMissing(ApiMember oldMember, ApiSurface newApi, string? viaType = null)
+    {
+        var typeName = viaType ?? oldMember.DeclaringType;
         var candidates = (oldMember.Kind == ApiMemberKind.Constructor
-                ? newApi.FindType(oldMember.DeclaringType) is { } own ? new[] { own } : Array.Empty<ApiType>()
-                : newApi.Hierarchy(oldMember.DeclaringType))
+                ? newApi.FindType(typeName) is { } own ? new[] { own } : Array.Empty<ApiType>()
+                : newApi.Hierarchy(typeName))
             .SelectMany(t => t.Members)
             .Where(m => m.Name == oldMember.Name)
             .ToList();
 
         var change = new ApiChange
         {
-            TypeName = oldMember.DeclaringType,
+            TypeName = typeName,
             MemberKey = oldMember.Key,
             Subject = oldMember.Display,
             Suggestions = candidates.Select(c => c.Display).Distinct().Take(5).ToList(),
@@ -137,14 +192,17 @@ public static class ApiDiff
 
         if (candidates.Count == 0)
         {
-            change.Id = $"member-removed:{oldMember.DeclaringType}::{oldMember.Key}";
+            change.Id = $"member-removed:{typeName}::{oldMember.Key}";
             change.Kind = ChangeKind.MemberRemoved;
             change.Severity = Severity.Breaking;
-            change.Description = "Removed";
+            change.Description = viaType == null || viaType == oldMember.DeclaringType
+                ? "Removed"
+                : $"No longer available on {SimpleName(viaType)}: it was inherited from {SimpleName(oldMember.DeclaringType)}, " +
+                  (newApi.FindType(oldMember.DeclaringType) == null ? "which was removed" : $"which {SimpleName(viaType)} no longer derives from");
         }
         else
         {
-            change.Id = $"signature-changed:{oldMember.DeclaringType}::{oldMember.Key}";
+            change.Id = $"signature-changed:{typeName}::{oldMember.Key}";
             change.Kind = ChangeKind.SignatureChanged;
             bool sourceCompatible = candidates.Any(c => OnlyAddsOptionalParameters(oldMember, c));
             change.Severity = sourceCompatible ? Severity.BinaryOnly : Severity.Breaking;
@@ -155,16 +213,22 @@ public static class ApiDiff
         return change;
     }
 
-    public static ApiChange? MemberDeprecated(ApiMember oldMember, ApiMember newMember)
+    /// <param name="viaType">
+    /// The type the member was reached through, when in the new version it resolves
+    /// there to a different declaration than on its old declaring type (for example
+    /// the type now redeclares it), so the deprecation belongs to that type.
+    /// </param>
+    public static ApiChange? MemberDeprecated(ApiMember oldMember, ApiMember newMember, string? viaType = null)
     {
         if (newMember.Deprecated == null || oldMember.Deprecated != null)
             return null;
+        var typeName = viaType ?? oldMember.DeclaringType;
         return new ApiChange
         {
-            Id = $"member-deprecated:{oldMember.DeclaringType}::{oldMember.Key}",
+            Id = $"member-deprecated:{typeName}::{oldMember.Key}",
             Kind = ChangeKind.Deprecated,
             Severity = newMember.Deprecated.IsError ? Severity.Breaking : Severity.Warning,
-            TypeName = oldMember.DeclaringType,
+            TypeName = typeName,
             MemberKey = oldMember.Key,
             Subject = oldMember.Display,
             Description = Deprecated(newMember.Deprecated),

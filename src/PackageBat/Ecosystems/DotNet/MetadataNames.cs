@@ -31,11 +31,19 @@ internal sealed class TypeNameProvider : ISignatureTypeProvider<string, GenericN
 
     public string GetTypeFromDefinition(MetadataReader r, TypeDefinitionHandle h, byte k) => Format(MetadataNames.FullName(r, h));
     public string GetTypeFromReference(MetadataReader r, TypeReferenceHandle h, byte k) => Format(MetadataNames.FullName(r, h));
-    public string GetTypeFromSpecification(MetadataReader r, GenericNames? ctx, TypeSpecificationHandle h, byte k) =>
-        r.GetTypeSpecification(h).DecodeSignature(this, ctx);
+    [ThreadStatic] static int _specDepth;
+
+    public string GetTypeFromSpecification(MetadataReader r, GenericNames? ctx, TypeSpecificationHandle h, byte k)
+    {
+        // A type spec can refer to itself in a malformed file; don't recurse forever.
+        if (_specDepth >= MetadataNames.MaxDepth) throw MetadataNames.TooDeep("type specifications");
+        _specDepth++;
+        try { return r.GetTypeSpecification(h).DecodeSignature(this, ctx); }
+        finally { _specDepth--; }
+    }
 
     public string GetSZArrayType(string e) => e + "[]";
-    public string GetArrayType(string e, ArrayShape s) => e + "[" + new string(',', s.Rank - 1) + "]";
+    public string GetArrayType(string e, ArrayShape s) => e + "[" + new string(',', Math.Max(0, s.Rank - 1)) + "]";
     public string GetByReferenceType(string e) => _display ? "ref " + e : e + "&";
     public string GetPointerType(string e) => e + "*";
     public string GetPinnedType(string e) => e;
@@ -88,31 +96,83 @@ internal sealed class TypeNameProvider : ISignatureTypeProvider<string, GenericN
 
 internal static class MetadataNames
 {
+    /// <summary>
+    /// How deep nesting, generic instantiations and type specs may go. Real code
+    /// stays far below this; a malformed or hostile file can make these chains
+    /// cyclic, which would otherwise recurse until the process dies.
+    /// </summary>
+    internal const int MaxDepth = 64;
+
+    /// <summary>
+    /// True when <paramref name="e"/> means the file is malformed, as opposed to a
+    /// bug in PackageBat. System.Reflection.Metadata reports most bad input as
+    /// BadImageFormatException, but some as OverflowException,
+    /// InvalidOperationException, InvalidCastException or ArgumentException; those count only when
+    /// System.Reflection.Metadata threw them, not when our own code did.
+    /// </summary>
+    internal static bool IsMalformed(Exception e)
+    {
+        if (e is BadImageFormatException) return true;
+        if (e is not (OverflowException or InvalidOperationException or InvalidCastException or ArgumentException or IndexOutOfRangeException)) return false;
+        foreach (var f in new System.Diagnostics.StackTrace(e, false).GetFrames())
+        {
+            var assembly = f.GetMethod()?.DeclaringType?.Assembly;
+            if (assembly == typeof(MetadataReader).Assembly) return true;
+            if (assembly == typeof(MetadataNames).Assembly) return false;
+        }
+        return false;
+    }
+
+    internal static BadImageFormatException TooDeep(string what) =>
+        new($"Malformed metadata: {what} nest deeper than {MaxDepth} levels (or form a cycle).");
+
     public static string FullName(MetadataReader r, TypeDefinitionHandle h)
     {
-        var td = r.GetTypeDefinition(h);
-        var name = r.GetString(td.Name);
-        var declaring = td.GetDeclaringType();
-        if (!declaring.IsNil) return FullName(r, declaring) + "+" + name;
-        var ns = r.GetString(td.Namespace);
-        return ns.Length == 0 ? name : ns + "." + name;
+        var parts = new List<string>();
+        for (int depth = 0; ; depth++)
+        {
+            if (depth > MaxDepth) throw TooDeep("nested types");
+            var td = r.GetTypeDefinition(h);
+            var declaring = td.GetDeclaringType();
+            if (declaring.IsNil)
+            {
+                var ns = r.GetString(td.Namespace);
+                parts.Add(ns.Length == 0 ? r.GetString(td.Name) : ns + "." + r.GetString(td.Name));
+                break;
+            }
+            parts.Add(r.GetString(td.Name));
+            h = declaring;
+        }
+        parts.Reverse();
+        return string.Join("+", parts);
     }
 
     public static string FullName(MetadataReader r, TypeReferenceHandle h)
     {
-        var tr = r.GetTypeReference(h);
-        var name = r.GetString(tr.Name);
-        if (tr.ResolutionScope.Kind == HandleKind.TypeReference)
-            return FullName(r, (TypeReferenceHandle)tr.ResolutionScope) + "+" + name;
-        var ns = r.GetString(tr.Namespace);
-        return ns.Length == 0 ? name : ns + "." + name;
+        var parts = new List<string>();
+        for (int depth = 0; ; depth++)
+        {
+            if (depth > MaxDepth) throw TooDeep("nested type references");
+            var tr = r.GetTypeReference(h);
+            if (tr.ResolutionScope.Kind != HandleKind.TypeReference)
+            {
+                var ns = r.GetString(tr.Namespace);
+                parts.Add(ns.Length == 0 ? r.GetString(tr.Name) : ns + "." + r.GetString(tr.Name));
+                break;
+            }
+            parts.Add(r.GetString(tr.Name));
+            h = (TypeReferenceHandle)tr.ResolutionScope;
+        }
+        parts.Reverse();
+        return string.Join("+", parts);
     }
 
     /// <summary>The assembly a type reference points into; null when it points into the referencing module itself.</summary>
     public static string? TargetAssembly(MetadataReader r, TypeReferenceHandle h)
     {
-        while (true)
+        for (int depth = 0; ; depth++)
         {
+            if (depth > MaxDepth) throw TooDeep("nested type references");
             var scope = r.GetTypeReference(h).ResolutionScope;
             switch (scope.Kind)
             {
@@ -129,11 +189,15 @@ internal static class MetadataNames
     /// </summary>
     public static EntityHandle UnderlyingType(MetadataReader r, EntityHandle h)
     {
-        if (h.Kind != HandleKind.TypeSpecification) return h;
-        var blob = r.GetBlobReader(r.GetTypeSpecification((TypeSpecificationHandle)h).Signature);
-        if (blob.ReadSignatureTypeCode() != SignatureTypeCode.GenericTypeInstance) return default;
-        blob.ReadSignatureTypeCode(); // CLASS or VALUETYPE
-        return UnderlyingType(r, blob.ReadTypeHandle());
+        for (int depth = 0; h.Kind == HandleKind.TypeSpecification; depth++)
+        {
+            if (depth > MaxDepth) throw TooDeep("type specifications");
+            var blob = r.GetBlobReader(r.GetTypeSpecification((TypeSpecificationHandle)h).Signature);
+            if (blob.ReadSignatureTypeCode() != SignatureTypeCode.GenericTypeInstance) return default;
+            blob.ReadSignatureTypeCode(); // CLASS or VALUETYPE
+            h = blob.ReadTypeHandle();
+        }
+        return h;
     }
 
     public static string? TypeName(MetadataReader r, EntityHandle h) => h.Kind switch

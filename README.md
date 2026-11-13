@@ -120,8 +120,20 @@ src/PackageBat/
   Report/       Markdown for PR comments
   Ecosystems/   IEcosystem + DotNet/ (NuGet download, metadata API extractor, IL+PDB usage scanner, bump detector)
 action.yml, action/run.sh   the GitHub Action
-tests/          end-to-end tests that compile two library versions and a consumer in memory
+tests/PackageBat.Tests/   end-to-end tests that compile two library versions and a consumer in memory
+tests/PackageBat.Fuzz/    fuzz and property tests (see below)
 ```
+
+## Fuzzing
+
+`tests/PackageBat.Fuzz` uses [CsCheck](https://github.com/AnthonyLloyd/CsCheck) to throw corrupted package and consumer assemblies, corrupted PDBs, corrupted JSON (through `packagebat analyze`) and junk project files at PackageBat, and checks properties of the diff and matcher on random API surfaces. In normal CI each target runs a few hundred inputs; the [Fuzz workflow](.github/workflows/fuzz.yml) runs every night for longer and can be started by hand.
+
+```bash
+FUZZ_SECONDS=60 dotnet test tests/PackageBat.Fuzz           # one minute per target
+FUZZ_SEED=<seed> dotnet test tests/PackageBat.Fuzz --filter <test>   # replay a failure
+```
+
+Inputs that crash a target are saved under `fuzz-findings/` (the workflow uploads them as an artifact).
 
 ## License
 

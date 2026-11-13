@@ -22,7 +22,7 @@ internal static class Compiler
             .Append(CSharpSyntaxTree.ParseText($"[assembly: System.Reflection.AssemblyVersion(\"{version}\")]", path: "AssemblyInfo.cs", encoding: Encoding.UTF8));
         var compilation = CSharpCompilation.Create(assemblyName, trees,
             Framework.Concat(references.Select(r => MetadataReference.CreateFromFile(r))),
-            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, nullableContextOptions: NullableContextOptions.Enable));
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, nullableContextOptions: NullableContextOptions.Enable, allowUnsafe: true));
 
         var dll = Path.Combine(dir, assemblyName + ".dll");
         var pdb = Path.Combine(dir, assemblyName + ".pdb");

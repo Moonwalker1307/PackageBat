@@ -26,7 +26,8 @@ public class FrameworkSelectorTests
     [InlineData(".NETCoreApp,Version=v3.1", "netcoreapp3.1")]
     [InlineData(".NETFramework,Version=v4.7.2", "net472")]
     [InlineData(".NETStandard,Version=v2.0", "netstandard2.0")]
-    public void Reads_target_framework_attribute(string value, string expected) =>
+    [InlineData(".NETCoreApp,Version=v\u0668.0", null)] // non-ASCII digits (found by fuzzing)
+    public void Reads_target_framework_attribute(string value, string? expected) =>
         Assert.Equal(expected, FrameworkSelector.FromTargetFrameworkAttribute(value));
 }
 
@@ -37,6 +38,7 @@ public class NuGetTests
     [InlineData("[13.0.3]", "13.0.3")]
     [InlineData("2.0.0-beta4.22272.1", "2.0.0-beta4.22272.1")]
     [InlineData("1.0.0.0", "1.0.0")]
+    [InlineData("2.2.1.00", "2.2.1")] // found by fuzzing
     [InlineData("1.02.3+sha.abc", "1.2.3")]
     public void Normalizes_versions_like_nuget(string input, string expected) =>
         Assert.Equal(expected, NuGetFetcher.NormalizeVersion(input));
