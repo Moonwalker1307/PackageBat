@@ -213,6 +213,52 @@ internal static class MetadataNames
 
     public static string FieldKey(string name, string type) => $"{name}|{type}";
 
+    /// <summary>
+    /// Reads the fixed (constructor) arguments of an attribute whose constructor takes
+    /// only strings and bools, like [Obsolete] and [TargetFramework]. Null for any other
+    /// constructor or a malformed blob.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately not CustomAttribute.DecodeValue: it trusts array lengths in the blob,
+    /// so a corrupt or hostile assembly can make it allocate gigabytes (found by fuzzing).
+    /// Named arguments are skipped, since nothing here needs them.
+    /// </remarks>
+    public static object?[]? ReadStringAndBoolArguments(MetadataReader r, CustomAttribute ca)
+    {
+        try
+        {
+            var signature = ca.Constructor.Kind switch
+            {
+                HandleKind.MethodDefinition => r.GetMethodDefinition((MethodDefinitionHandle)ca.Constructor).Signature,
+                HandleKind.MemberReference => r.GetMemberReference((MemberReferenceHandle)ca.Constructor).Signature,
+                _ => default,
+            };
+            if (signature.IsNil) return null;
+            var sig = r.GetBlobReader(signature);
+            sig.ReadSignatureHeader();
+            var count = sig.ReadCompressedInteger();
+            if (count > 16) return null;
+            sig.ReadSignatureTypeCode(); // return type (void)
+            var types = new SignatureTypeCode[count];
+            for (int i = 0; i < count; i++)
+            {
+                types[i] = sig.ReadSignatureTypeCode();
+                if (types[i] is not (SignatureTypeCode.String or SignatureTypeCode.Boolean)) return null;
+            }
+
+            var value = r.GetBlobReader(ca.Value);
+            if (value.ReadUInt16() != 1) return null; // prolog
+            var args = new object?[count];
+            for (int i = 0; i < count; i++)
+                args[i] = types[i] == SignatureTypeCode.String ? value.ReadSerializedString() : value.ReadBoolean();
+            return args;
+        }
+        catch (Exception e) when (IsMalformed(e))
+        {
+            return null;
+        }
+    }
+
     public static string? AttributeTypeName(MetadataReader r, CustomAttribute ca) => ca.Constructor.Kind switch
     {
         HandleKind.MemberReference => TypeName(r, r.GetMemberReference((MemberReferenceHandle)ca.Constructor).Parent),
