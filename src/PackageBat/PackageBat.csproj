@@ -14,10 +14,18 @@
     <Description>Shows which APIs a dependency upgrade changes that your code actually uses, and where.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>icon.png</PackageIcon>
+    <Authors>moonwalker1307</Authors>
+    <PackageTags>dependencies;dependabot;renovate;nuget;breaking-changes;api-diff;dotnet-tool</PackageTags>
+    <PackageProjectUrl>https://github.com/Moonwalker1307/PackageBat</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/Moonwalker1307/PackageBat</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
   </PropertyGroup>
 
   <ItemGroup>
     <None Include="../../README.md" Pack="true" PackagePath="/" />
+    <None Include="../../assets/icon.png" Pack="true" PackagePath="/" />
     <InternalsVisibleTo Include="PackageBat.Tests" />
     <InternalsVisibleTo Include="PackageBat.Fuzz" />
   </ItemGroup>
