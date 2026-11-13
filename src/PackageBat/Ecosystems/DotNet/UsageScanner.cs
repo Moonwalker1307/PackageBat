@@ -222,6 +222,9 @@ internal static class UsageScanner
                         : (MemberReferenceHandle)h;
                     if (Member(mrh) is { } m)
                         Emit(m.Type, m.Key, UsageKind.Member, Locate(points, offset, mh), Symbol(mh));
+                    // new List<Widget>(): the member is the framework's, but the type argument is the package's.
+                    foreach (var t in PackageTypesInSpec(r.GetMemberReference(mrh).Parent))
+                        Emit(t, null, UsageKind.Type, Locate(points, offset, mh), Symbol(mh));
                     if (h.Kind == HandleKind.MethodSpecification)
                         foreach (var t in PackageTypesInMethodSpec(r.GetMethodSpecification((MethodSpecificationHandle)h)))
                             Emit(t, null, UsageKind.Type, Locate(points, offset, mh), Symbol(mh));
@@ -230,16 +233,20 @@ internal static class UsageScanner
                 case HandleKind.TypeSpecification:
                     if (PackageType(h) is { } tn)
                         Emit(tn, null, UsageKind.Type, Locate(points, offset, mh), Symbol(mh));
-                    if (h.Kind == HandleKind.TypeSpecification)
-                    {
-                        string spec = "";
-                        try { spec = r.GetTypeSpecification((TypeSpecificationHandle)h).DecodeSignature(TypeNameProvider.Key, null); }
-                        catch (BadImageFormatException) { return; }
-                        foreach (var t in PackageTypesIn(spec))
-                            Emit(t, null, UsageKind.Type, Locate(points, offset, mh), Symbol(mh));
-                    }
+                    foreach (var t in PackageTypesInSpec(h))
+                        Emit(t, null, UsageKind.Type, Locate(points, offset, mh), Symbol(mh));
                     return;
             }
+        }
+
+        /// <summary>Package types mentioned in a TypeSpec (generic arguments, array element types); nothing for other handles.</summary>
+        IEnumerable<string> PackageTypesInSpec(EntityHandle h)
+        {
+            if (h.Kind != HandleKind.TypeSpecification) return Array.Empty<string>();
+            string spec = "";
+            try { spec = r.GetTypeSpecification((TypeSpecificationHandle)h).DecodeSignature(TypeNameProvider.Key, null); }
+            catch (BadImageFormatException) { return Array.Empty<string>(); }
+            return PackageTypesIn(spec);
         }
 
         IEnumerable<string> PackageTypesInMethodSpec(MethodSpecification ms)
