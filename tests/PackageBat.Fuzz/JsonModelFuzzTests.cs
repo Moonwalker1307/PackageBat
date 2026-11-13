@@ -27,6 +27,11 @@ public sealed class JsonModelFuzzTests(ITestOutputHelper output)
         public byte[] Bundle() => Encoding.UTF8.GetBytes($"// old-api\n{OldApi}\n// new-api\n{NewApi}\n// usages\n{Usages}\n");
     }
 
+    // Declared before CorruptFiles: static fields initialize in order, so CorruptFiles
+    // must not refer to a field further down.
+    readonly record struct Edit(int Kind, int Path, int Value);
+    static readonly Gen<Edit> JsonEdit = Gen.Select(Gen.Int[0, 11], Gen.Int.Positive, Gen.Int.Positive, (k, p, v) => new Edit(k, p, v));
+
     /// <summary>Valid documents, then a few structural edits to their JSON trees.</summary>
     static readonly Gen<Files> CorruptFiles =
         ModelGen.Bump(ModelGen.Loose)
@@ -74,8 +79,6 @@ public sealed class JsonModelFuzzTests(ITestOutputHelper output)
 
     // ---- JSON tree edits -------------------------------------------------
 
-    readonly record struct Edit(int Kind, int Path, int Value);
-    static readonly Gen<Edit> JsonEdit = Gen.Select(Gen.Int[0, 11], Gen.Int.Positive, Gen.Int.Positive, (k, p, v) => new Edit(k, p, v));
 
     static readonly JsonNode?[] Replacements =
     {
