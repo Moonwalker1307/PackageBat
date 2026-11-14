@@ -24,14 +24,18 @@ public static class MarkdownReport
             return sb.ToString();
         }
 
+        var coverage = report.Coverage != null;
         foreach (var p in report.Packages)
-            RenderPackage(sb, p, linkBase);
+            RenderPackage(sb, p, linkBase, coverage);
 
-        sb.AppendLine($"<sub>🦇 PackageBat compared the public API of each package version and matched it against {Plural(report.Scanned.Count, "compiled assembly", "compiled assemblies")} of this repo. It reports changes to APIs your code references; behaviour changes behind an unchanged signature are not detected.</sub>");
+        var tests = report.Coverage is { } c
+            ? $" Test coverage is from {Plural(c.Files.Count, "coverage file")}: a covered line ran during the tests, which doesn't prove a test checks what it does."
+            : "";
+        sb.AppendLine($"<sub>🦇 PackageBat compared the public API of each package version and matched it against {Plural(report.Scanned.Count, "compiled assembly", "compiled assemblies")} of this repo. It reports changes to APIs your code references; behaviour changes behind an unchanged signature are not detected.{tests}</sub>");
         return sb.ToString();
     }
 
-    static void RenderPackage(StringBuilder sb, PackageReport p, string? linkBase)
+    static void RenderPackage(StringBuilder sb, PackageReport p, string? linkBase, bool coverage)
     {
         sb.AppendLine($"### 🦇 {p.Package} {p.FromVersion} → {p.ToVersion}");
         sb.AppendLine();
@@ -56,13 +60,18 @@ public static class MarkdownReport
             if (warn > 0) parts.Add($"{warn} deprecated");
             sb.AppendLine($"{(breaking.Count > 0 ? "❌" : "⚠️")} **{head}** ({string.Join(", ", parts)})");
             sb.AppendLine();
-            sb.AppendLine("| | API | Change | Where you use it |");
-            sb.AppendLine("|---|---|---|---|");
+            if (coverage)
+            {
+                sb.AppendLine(CoverageLine(p));
+                sb.AppendLine();
+            }
+            sb.AppendLine(coverage ? "| | API | Change | Where you use it | Run by tests |" : "| | API | Change | Where you use it |");
+            sb.AppendLine(coverage ? "|---|---|---|---|---|" : "|---|---|---|---|");
             foreach (var u in p.Used)
             {
                 var where = u.Locations.Take(MaxLinksInTable).Select(l => Link(l, linkBase)).ToList();
                 if (u.Locations.Count > MaxLinksInTable) where.Add($"+{u.Locations.Count - MaxLinksInTable} more");
-                sb.AppendLine($"| {Icon(u.Change.Severity)} | `{Escape(u.Change.Subject)}` | {Escape(Describe(u.Change))}{(u.MembersUsed.Count > 0 ? Escape($" (you use {string.Join(", ", u.MembersUsed.Take(5))}{(u.MembersUsed.Count > 5 ? ", …" : "")})") : "")} | {string.Join("<br>", where)} |");
+                sb.AppendLine($"| {Icon(u.Change.Severity)} | `{Escape(u.Change.Subject)}` | {Escape(Describe(u.Change))}{(u.MembersUsed.Count > 0 ? Escape($" (you use {string.Join(", ", u.MembersUsed.Take(5))}{(u.MembersUsed.Count > 5 ? ", …" : "")})") : "")} | {string.Join("<br>", where)} |{(coverage ? $" {TestsCell(u.Locations)} |" : "")}");
             }
             sb.AppendLine();
 
@@ -101,6 +110,32 @@ public static class MarkdownReport
         sb.AppendLine();
     }
 
+    static string CoverageLine(PackageReport p)
+    {
+        var sites = p.Used.SelectMany(u => u.Locations)
+            .GroupBy(l => l.File != null ? $"{l.File}:{l.Line}" : $"{l.Module}|{l.Symbol}")
+            .Select(g => g.First().TestHits)
+            .ToList();
+        int covered = sites.Count(h => h > 0), notCovered = sites.Count(h => h == 0), unknown = sites.Count(h => h == null);
+        if (covered + notCovered == 0)
+            return "🧪 **Test coverage unknown:** the coverage file doesn't include any of these lines. Check that it comes from this repository's tests.";
+        var text = notCovered == 0
+            ? $"🧪 **Your tests run {(covered == 1 ? "the affected call site" : $"all {covered} affected call sites")}{(unknown > 0 ? " with coverage data" : "")}.**"
+            : covered > 0 ? $"🧪 **{notCovered} of {covered + notCovered} affected call sites {(notCovered == 1 ? "is" : "are")} never run by your tests.**"
+            : notCovered == 1 ? "🧪 **The affected call site is never run by your tests.**"
+            : $"🧪 **None of the {notCovered} affected call sites are run by your tests.**";
+        if (unknown > 0) text += $" {Plural(unknown, "call site has", "call sites have")} no coverage data.";
+        return text;
+    }
+
+    static string TestsCell(List<SourceLocation> locations)
+    {
+        int covered = locations.Count(l => l.TestHits > 0), known = locations.Count(l => l.TestHits != null), unknown = locations.Count - known;
+        if (known == 0) return "no data";
+        var icon = covered == known ? "✅" : covered == 0 ? "❌" : "⚠️";
+        return $"{icon} {covered} of {known}{(unknown > 0 ? $" ({unknown} no data)" : "")}";
+    }
+
     static string Describe(ApiChange c)
     {
         var text = c.Description;
@@ -109,7 +144,9 @@ public static class MarkdownReport
         return text;
     }
 
-    static string Link(SourceLocation l, string? linkBase)
+    static string Link(SourceLocation l, string? linkBase) => LinkOnly(l, linkBase) + (l.TestHits == 0 ? " (untested)" : "");
+
+    static string LinkOnly(SourceLocation l, string? linkBase)
     {
         if (l.File == null) return $"`{l.Symbol ?? l.Module}` (no source info)";
         var label = $"{l.File}{(l.Line is { } n ? $":{n}" : "")}";

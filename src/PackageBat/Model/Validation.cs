@@ -62,6 +62,7 @@ public static class Validation
             if (string.IsNullOrEmpty(u.TypeName)) return $"usages[{i}].typeName is missing";
             u.Location ??= new SourceLocation();
             u.Location.Module ??= "";
+            u.Location.TestHits = null; // only ever set from --coverage, never taken from a usages file
         }
         return null;
     }

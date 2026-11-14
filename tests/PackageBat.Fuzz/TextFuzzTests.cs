@@ -27,6 +27,27 @@ public sealed class TextFuzzTests(ITestOutputHelper output)
             Gen.Frequency((3, Gen.OneOfConst(ProjectSnippets).Array[0, 14].Select(a => string.Concat(a))), (1, Junk)),
             xml => BumpDetector.ReadVersions(xml), _ => false, System.Text.Encoding.UTF8.GetBytes, ".xml");
 
+    static readonly string[] CoverageSnippets =
+    {
+        "<coverage>", "</coverage>", "<sources>", "</sources>", "<source>", "</source>", "/repo/", "C:\\src\\", "/",
+        "<class filename=\"a.cs\">", "<class filename=\"\">", "<class filename=\"/_/b.cs\"/>", "</class>", "<lines>", "</lines>",
+        "<line number=\"1\" hits=\"2\"/>", "<line number=\"-1\" hits=\"99999999999999999999\"/>", "<line number=\"2147483648\" hits=\"1\"/>",
+        "<line hits=\"x\"/>", "<methods>", "</methods>", "<method>", "</method>", "<![CDATA[/x]]>", "<?xml version=\"1.0\"?>",
+        "<!DOCTYPE coverage SYSTEM \"http://example.invalid/c.dtd\">", "<!DOCTYPE x [<!ENTITY e \"&e;&e;\">]>", "&e;", "&amp;", "&#0;",
+        "<!--", "-->", "\u0000", "<", ">", "\"",
+    };
+
+    [Fact]
+    public void Coverage_reader_only_rejects_with_usage_errors() =>
+        Fuzz.Crashes("cobertura", output,
+            Gen.Select(Gen.Frequency((3, Gen.OneOfConst(CoverageSnippets).Array[0, 16].Select(a => string.Concat(a))), (1, Junk)),
+                Gen.OneOfConst("a.cs", "src/a.cs", "b.cs", "x/y/z.cs", ""), Gen.Int[-1, 3]),
+            t =>
+            {
+                var c = Analysis.LineCoverage.Parse(new MemoryStream(System.Text.Encoding.UTF8.GetBytes(t.Item1)), "fuzz.xml");
+                c.Hits(t.Item2, t.Item3);
+            }, e => e is Ecosystems.UsageException, t => System.Text.Encoding.UTF8.GetBytes(t.Item1), ".xml");
+
     [Fact]
     public void Version_normalizer_never_throws() =>
         Fuzz.Crashes("normalize-version", output, Junk, v => NuGetFetcher.NormalizeVersion(v),

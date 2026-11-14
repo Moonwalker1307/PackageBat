@@ -116,6 +116,46 @@ public sealed class CliTests : IDisposable
     }
 
     [Fact]
+    public async Task Coverage_file_annotates_the_report()
+    {
+        var coverage = Path.Combine(_dir, "coverage.cobertura.xml");
+        File.WriteAllText(coverage, """
+            <coverage><sources><source>/elsewhere/repo</source></sources><packages><package><classes>
+            <class filename="src/App.cs"><lines><line number="10" hits="2"/><line number="11" hits="0"/></lines></class>
+            </classes></package></packages></coverage>
+            """);
+        var json = Path.Combine(_dir, "out.json");
+        Assert.Equal(Program.ExitOk, await Analyze("--json", json, "--coverage", coverage));
+
+        var report = JsonSerializer.Deserialize<BlastRadiusReport>(File.ReadAllText(json), Program.Json)!;
+        Assert.NotNull(report.Coverage);
+        Assert.Equal(new[] { coverage }, report.Coverage.Files);
+        Assert.Equal((3, 1, 1, 1), (report.Coverage.CallSites, report.Coverage.Covered, report.Coverage.NotCovered, report.Coverage.Unknown));
+        Assert.Equal(new int?[] { 2, 0, null }, report.Packages[0].Used.Select(u => u.Locations[0].TestHits));
+        Assert.Contains("| Run by tests |", File.ReadAllText(Path.Combine(_dir, "out.md")));
+    }
+
+    [Fact]
+    public async Task Without_coverage_the_report_has_none()
+    {
+        var json = Path.Combine(_dir, "out.json");
+        Assert.Equal(Program.ExitOk, await Analyze("--json", json));
+        var text = File.ReadAllText(json);
+        Assert.DoesNotContain("coverage", text);
+        Assert.DoesNotContain("testHits", text);
+    }
+
+    [Theory]
+    [InlineData("<coverage>")]
+    [InlineData(null)]
+    public async Task Bad_coverage_file_is_a_usage_error(string? content)
+    {
+        var path = Path.Combine(_dir, "bad.xml");
+        if (content != null) File.WriteAllText(path, content);
+        Assert.Equal(Program.ExitError, await Analyze("--coverage", path));
+    }
+
+    [Fact]
     public async Task Missing_input_file_option_is_a_usage_error() =>
         Assert.Equal(Program.ExitError, await Program.Main(new[] { "analyze", "--old-api", _old, "--usages", _usages }));
 

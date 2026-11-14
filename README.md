@@ -63,10 +63,33 @@ On every PR that changes a package version (Dependabot, Renovate or by hand) it:
 | `dotnet-version` | `8.0.x` | SDKs to install (one per line). Add yours if your code targets something newer. |
 | `fail-on` | `none` | `breaking`, `binary` or `warning`: fail when used changes reach this level. |
 | `threshold` | `0` | Only fail when more than this many used changes reach `fail-on`. |
+| `coverage` | | Opt-in. Cobertura coverage file(s) from your tests, one path or glob per line. See [Test coverage](#test-coverage-opt-in). |
 | `comment` | `true` | Post the report as a PR comment. |
 | `base-ref` | PR base | What to compare against. |
 
-Outputs: `breaking`, `used-changes`, `report` (Markdown path), `report-json`.
+Outputs: `breaking`, `used-changes`, `untested` (with `coverage`: affected call sites your tests never run), `report` (Markdown path), `report-json`.
+
+### Test coverage (opt-in)
+
+Give PackageBat a Cobertura coverage file and the report also says whether your tests run each affected line: a summary such as "2 of 3 affected call sites are never run by your tests", a *Run by tests* column, and `(untested)` after each location no test reaches. It only reads the file; producing it is up to you, in a step before PackageBat.
+
+Run the tests on the PR's **base** commit. That is the code PackageBat analyses, so the line numbers match, and it still compiles even when the bump breaks the build:
+
+```yaml
+      - name: Test coverage before the bump
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git worktree add "$RUNNER_TEMP/base" "$(git merge-base "$BASE" HEAD)"
+          dotnet test "$RUNNER_TEMP/base" --collect "XPlat Code Coverage" --results-directory "$RUNNER_TEMP/coverage"
+      - uses: Moonwalker1307/PackageBat@main
+        with:
+          coverage: ${{ runner.temp }}/coverage/**/coverage.cobertura.xml
+```
+
+`XPlat Code Coverage` comes from the `coverlet.collector` package, which `dotnet new xunit`/`nunit`/`mstest` projects already reference. Any Cobertura file works (ReportGenerator, coverage.py, istanbul...), and several files are added up. Paths are matched on their end, so coverage made in another checkout or on another machine still lines up.
+
+A covered line is one that ran during the tests. That doesn't prove a test checks what the line does, so treat ✅ as "something would probably have noticed" and ❌ as "nothing will".
 
 ## Use it from the command line
 
@@ -79,6 +102,8 @@ packagebat analyze --package System.CommandLine --from 2.0.0-beta4.22272.1 --to 
 # whatever changed between two git revisions
 packagebat analyze --base origin/main --consumer . --markdown report.md --json report.json --fail-on breaking
 ```
+
+Add `--coverage coverage.cobertura.xml` (repeatable) to `analyze` to include test coverage.
 
 `--consumer` takes built assemblies or folders to search (anything with a `.pdb` next to it, `obj/` skipped). Run `packagebat help` for all options. Exit codes: `0` ok, `1` error, `2` over the `--fail-on` threshold.
 
@@ -116,7 +141,7 @@ So adding TypeScript, Java or Python means writing an extractor and a usage scan
 ```
 src/PackageBat/
   Model/        language-neutral API, usage and report types (the JSON format)
-  Analysis/     ApiDiff (old vs new API) and UsageMatcher (your usages vs the diff)
+  Analysis/     ApiDiff (old vs new API), UsageMatcher (your usages vs the diff), LineCoverage (Cobertura)
   Report/       Markdown for PR comments
   Ecosystems/   IEcosystem + DotNet/ (NuGet download, metadata API extractor, IL+PDB usage scanner, bump detector)
 action.yml, action/run.sh   the GitHub Action
