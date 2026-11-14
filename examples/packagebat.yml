@@ -23,8 +23,18 @@ jobs:
         with:
           fetch-depth: 0   # needs the base commit to see what changed
 
+      # Optional: say which affected lines your tests run. Tests run on the base
+      # commit, which is the code PackageBat analyses and still compiles.
+      # - name: Test coverage before the bump
+      #   env:
+      #     BASE: ${{ github.event.pull_request.base.sha }}
+      #   run: |
+      #     git worktree add "$RUNNER_TEMP/base" "$(git merge-base "$BASE" HEAD)"
+      #     dotnet test "$RUNNER_TEMP/base" --collect "XPlat Code Coverage" --results-directory "$RUNNER_TEMP/coverage"
+
       - uses: Moonwalker1307/PackageBat@main
         with:
+          # coverage: ${{ runner.temp }}/coverage/**/coverage.cobertura.xml
           # project: src/MyApp.sln
           # dotnet-version: |
           #   8.0.x

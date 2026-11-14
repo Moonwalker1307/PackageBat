@@ -69,6 +69,27 @@ trap 'git worktree remove --force "$work/base" > /dev/null 2>&1 || true' EXIT
 )
 echo "::endgroup::"
 
+# Opt-in coverage: expand each line of the input as a glob, relative to the repository root.
+coverage_args=()
+if [[ -n "${PB_COVERAGE:-}" ]]; then
+  shopt -s globstar nullglob
+  mapfile -t patterns <<< "$PB_COVERAGE"
+  for pattern in "${patterns[@]}"; do
+    pattern="$(sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' <<< "$pattern")"
+    [[ -z "$pattern" ]] && continue
+    found=0
+    IFS=$'\n'
+    # shellcheck disable=SC2206 # unquoted on purpose: this is the glob expansion
+    matches=($pattern)
+    unset IFS
+    for f in "${matches[@]}"; do
+      if [[ -f "$f" ]]; then coverage_args+=(--coverage "$(realpath "$f")"); found=1; fi
+    done
+    [[ "$found" == "1" ]] || echo "::warning::No coverage file matches '$pattern'. Run your tests with coverage before PackageBat (see the README)."
+  done
+  shopt -u globstar nullglob
+fi
+
 server="${GITHUB_SERVER_URL:-https://github.com}"
 set +e
 pb analyze \
@@ -79,7 +100,8 @@ pb analyze \
   --markdown "$report" \
   --json "$json" \
   --fail-on "${PB_FAIL_ON:-none}" \
-  --threshold "${PB_THRESHOLD:-0}"
+  --threshold "${PB_THRESHOLD:-0}" \
+  "${coverage_args[@]}"
 status=$?
 set -e
 
@@ -90,6 +112,7 @@ fi
 
 echo "breaking=$(jq '[.packages[].used[] | select(.change.severity == "Breaking")] | length' "$json")" >> "$GITHUB_OUTPUT"
 echo "used=$(jq '[.packages[].used[]] | length' "$json")" >> "$GITHUB_OUTPUT"
+echo "untested=$(jq -r '.coverage.notCovered // ""' "$json")" >> "$GITHUB_OUTPUT"
 cat "$report" >> "$GITHUB_STEP_SUMMARY"
 
 if [[ "${PB_COMMENT:-true}" == "true" && -n "${PB_PR:-}" ]]; then

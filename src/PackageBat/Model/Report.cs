@@ -72,6 +72,8 @@ public sealed class BlastRadiusReport
     public string Tool { get; set; } = "PackageBat";
     public List<PackageReport> Packages { get; set; } = new();
     public List<string> Scanned { get; set; } = new();
+    /// <summary>Set when coverage files were given: how many affected call sites tests run.</summary>
+    public CoverageSummary? Coverage { get; set; }
 
     public int Count(Severity s) => Packages.Sum(p => p.Used.Count(u => u.Change.Severity == s));
 }
@@ -84,4 +86,18 @@ public sealed class PackageBump
     public string From { get; set; } = "";
     public string To { get; set; } = "";
     public string? File { get; set; }
+}
+
+/// <summary>Test coverage of the affected call sites (distinct file:line across all packages).</summary>
+public sealed class CoverageSummary
+{
+    /// <summary>The coverage files that were read.</summary>
+    public List<string> Files { get; set; } = new();
+    public int CallSites { get; set; }
+    /// <summary>Tests ran the line at least once.</summary>
+    public int Covered { get; set; }
+    /// <summary>The coverage instruments the line, but no test ran it.</summary>
+    public int NotCovered { get; set; }
+    /// <summary>No file/line, or the coverage doesn't include it.</summary>
+    public int Unknown { get; set; }
 }

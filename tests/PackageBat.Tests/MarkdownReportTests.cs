@@ -189,4 +189,86 @@ public class MarkdownReportTests
         Assert.Contains("| `App` (no source info) |", md);
         Assert.Contains("in 0 files.", md);
     }
+
+    static SourceLocation H(string file, int line, int? hits) => new() { File = file, Line = line, Module = "App", TestHits = hits };
+
+    static string RenderWithCoverage(PackageReport p, int files = 1) =>
+        MarkdownReport.Render(new BlastRadiusReport
+        {
+            Packages = { p }, Scanned = { "App.dll" },
+            Coverage = new CoverageSummary { Files = Enumerable.Range(0, files).Select(i => $"{i}.xml").ToList() },
+        }, null).ReplaceLineEndings("\n");
+
+    [Fact]
+    public void Coverage_adds_a_summary_a_column_and_marks_untested_lines()
+    {
+        var md = RenderWithCoverage(Pkg(
+            U(Breaking, new[] { H("a.cs", 1, 4), H("a.cs", 2, 0), H("b.cs", 3, null), H("b.cs", 4, 0) }),
+            U(C("w", Severity.Warning, "B", "y"), new[] { H("a.cs", 1, 4) }),
+            U(C("x", Severity.Warning, "D", "z"), new[] { H("c.cs", 9, null) })), files: 2);
+
+        const string expected = """
+            ❌ **This bump changes 3 APIs you use, in 3 files.** (1 breaking, 2 deprecated)
+
+            🧪 **2 of 3 affected call sites are never run by your tests.** 2 call sites have no coverage data.
+
+            | | API | Change | Where you use it | Run by tests |
+            |---|---|---|---|---|
+            | ❌ | `Client.Send(string)` | Signature changed | `a.cs:1`<br>`a.cs:2` (untested)<br>`b.cs:3`<br>+1 more | ⚠️ 1 of 3 (1 no data) |
+            | ⚠️ | `B` | y | `a.cs:1` | ✅ 1 of 1 |
+            | ⚠️ | `D` | z | `c.cs:9` | no data |
+
+            <details><summary>All locations</summary>
+
+            **`Client.Send(string)`**
+            - `a.cs:1`
+            - `a.cs:2` (untested)
+            - `b.cs:3`
+            - `b.cs:4` (untested)
+
+            </details>
+            """;
+        Assert.Contains(expected, md);
+        Assert.Contains("Test coverage is from 2 coverage files: a covered line ran during the tests, which doesn't prove a test checks what it does.</sub>", md);
+    }
+
+    [Theory]
+    [InlineData(new[] { 1 }, "🧪 **Your tests run the affected call site.**\n")]
+    [InlineData(new[] { 1, 2 }, "🧪 **Your tests run all 2 affected call sites.**\n")]
+    [InlineData(new[] { 1, -1 }, "🧪 **Your tests run the affected call site with coverage data.** 1 call site has no coverage data.\n")]
+    [InlineData(new[] { 1, 1, -1, -1 }, "🧪 **Your tests run all 2 affected call sites with coverage data.** 2 call sites have no coverage data.\n")]
+    [InlineData(new[] { 0 }, "🧪 **The affected call site is never run by your tests.**\n")]
+    [InlineData(new[] { 0, 0 }, "🧪 **None of the 2 affected call sites are run by your tests.**\n")]
+    [InlineData(new[] { 0, 3 }, "🧪 **1 of 2 affected call sites is never run by your tests.**\n")]
+    [InlineData(new[] { -1 }, "🧪 **Test coverage unknown:** the coverage file doesn't include any of these lines. Check that it comes from this repository's tests.\n")]
+    public void Coverage_summary_wording(int[] hits, string line)
+    {
+        // -1 = no coverage data for that line
+        var locs = hits.Select((h, i) => H("a.cs", i + 1, h < 0 ? null : h));
+        Assert.Contains(line, RenderWithCoverage(Pkg(U(Breaking, locs))));
+    }
+
+    [Fact]
+    public void Coverage_summary_counts_a_line_used_by_two_changes_once()
+    {
+        var md = RenderWithCoverage(Pkg(U(Breaking, new[] { H("a.cs", 1, 0) }), U(C("w", Severity.Warning, "B", "y"), new[] { H("a.cs", 1, 0) })));
+        Assert.Contains("🧪 **The affected call site is never run by your tests.**", md);
+    }
+
+    [Fact]
+    public void Without_coverage_there_is_no_column_even_if_locations_have_hits()
+    {
+        var md = Render(Pkg(U(Breaking, new[] { L("a.cs", 1) })));
+        Assert.DoesNotContain("🧪", md);
+        Assert.DoesNotContain("Run by tests", md);
+        Assert.DoesNotContain("coverage", md);
+    }
+
+    [Fact]
+    public void Coverage_does_not_change_an_unaffected_package()
+    {
+        var md = RenderWithCoverage(Pkg());
+        Assert.DoesNotContain("🧪", md);
+        Assert.Contains("1 coverage file:", md);
+    }
 }

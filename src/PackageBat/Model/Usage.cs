@@ -48,4 +48,9 @@ public sealed class SourceLocation
     public string Module { get; set; } = "";
     /// <summary>The consumer symbol containing the usage, for when there is no file.</summary>
     public string? Symbol { get; set; }
+    /// <summary>
+    /// How many times tests ran this line, from the coverage file(s) given to
+    /// analyze. Null when no coverage was given, or it doesn't cover this line.
+    /// </summary>
+    public int? TestHits { get; set; }
 }

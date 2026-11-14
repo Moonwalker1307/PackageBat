@@ -39,6 +39,7 @@ public static class Program
           --link-base <url>      Turn locations into links: <url>/<path>#L<line>.
           --markdown <file>      Write the Markdown report here (default: stdout).
           --json <file>          Write the full report as JSON.
+          --coverage <file>      Cobertura XML coverage from your tests (repeatable). Adds whether tests run each affected line.
           --fail-on <level>      breaking | binary | warning: exit 2 when used changes at or above this level
           --threshold <n>        ...number more than n (default 0).
           --ecosystem <id>       Default: dotnet.
@@ -121,6 +122,8 @@ public static class Program
         var jsonOut = args.Get("json");
         var failOn = ParseFailOn(args.Get("fail-on"));
         var threshold = int.TryParse(args.Get("threshold") ?? "0", out var t) ? t : throw new UsageException("--threshold must be a number.");
+        // Read coverage up front so a bad file fails before any download.
+        var coverage = args.All("coverage") is { Count: > 0 } coverageFiles ? LineCoverage.Read(coverageFiles) : null;
 
         if (args.Get("old-api") is { } oldApiPath)
         {
@@ -168,6 +171,12 @@ public static class Program
                 }
             }
             report.Scanned.AddRange(scanned.Order());
+        }
+
+        if (coverage != null)
+        {
+            var c = coverage.Annotate(report);
+            opts.Log.WriteLine($"Coverage from {c.Files.Count} report(s): {c.Covered} of {c.CallSites} affected call site(s) run by tests, {c.NotCovered} not, {c.Unknown} without coverage data.");
         }
 
         var markdown = MarkdownReport.Render(report, linkBase);

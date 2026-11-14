@@ -24,6 +24,12 @@ inputs:
   threshold:
     description: Only fail when more than this many used API changes reach the fail-on level.
     default: '0'
+  coverage:
+    description: >-
+      Opt-in. Cobertura XML coverage file(s) from your tests, one path or glob per line, relative to the repository root
+      (e.g. `coverage/**/coverage.cobertura.xml` from `dotnet test --collect "XPlat Code Coverage"`). When set, the report
+      says whether your tests run each affected line. Empty (the default) leaves coverage out.
+    default: ''
   comment:
     description: Post (and keep updating) the report as a pull request comment.
     default: 'true'
@@ -38,6 +44,9 @@ outputs:
   used-changes:
     description: Number of changed APIs your code uses, at any severity.
     value: ${{ steps.analyze.outputs.used }}
+  untested:
+    description: With `coverage` set, the number of affected call sites your tests never run. Empty otherwise.
+    value: ${{ steps.analyze.outputs.untested }}
   report:
     description: Path to the Markdown report.
     value: ${{ steps.analyze.outputs.report }}
@@ -60,6 +69,7 @@ runs:
         PB_BASE: ${{ inputs.base-ref || github.event.pull_request.base.sha }}
         PB_FAIL_ON: ${{ inputs.fail-on }}
         PB_THRESHOLD: ${{ inputs.threshold }}
+        PB_COVERAGE: ${{ inputs.coverage }}
         PB_COMMENT: ${{ inputs.comment }}
         PB_PR: ${{ github.event.pull_request.number }}
         GH_TOKEN: ${{ inputs.github-token }}
