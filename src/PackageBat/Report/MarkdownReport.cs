@@ -25,8 +25,27 @@ public static class MarkdownReport
         }
 
         var coverage = report.Coverage != null;
-        foreach (var p in report.Packages)
-            RenderPackage(sb, p, linkBase, coverage);
+        // A dependency of a dependency with nothing to report gets one line, not a section.
+        static bool Quiet(PackageReport p) => p.Via != null && p.Used.Count == 0 && p.Notes.Count == 0;
+        foreach (var p in report.Packages.Where(p => !Quiet(p)))
+        {
+            var loud = report.Packages.Where(d => d.Via != null && d.Via.Equals(p.Package, StringComparison.OrdinalIgnoreCase) && !Quiet(d)).ToList();
+            RenderPackage(sb, p, linkBase, coverage, loud);
+        }
+
+        var quiet = report.Packages.Where(Quiet).ToList();
+        if (quiet.Count + report.Unreferenced.Count > 0)
+        {
+            sb.AppendLine($"<details><summary>{Plural(quiet.Count + report.Unreferenced.Count, "dependency", "dependencies")} of these packages also change version, with nothing to report</summary>");
+            sb.AppendLine();
+            foreach (var p in quiet)
+                sb.AppendLine($"- {Escape(p.Package)} {Escape(p.FromVersion)} → {Escape(p.ToVersion)} (via {Escape(p.Via!)}): {(p.ReferenceCount == 0 ? "your compiled code doesn't reference it" : $"no changes to the {Plural(p.UsedApiCount, "API")} your code uses")}");
+            foreach (var b in report.Unreferenced)
+                sb.AppendLine($"- {Escape(b.Package)} {Escape(b.From)} → {Escape(b.To)} (via {Escape(b.Via ?? "?")}): your compiled code doesn't reference it");
+            sb.AppendLine();
+            sb.AppendLine("</details>");
+            sb.AppendLine();
+        }
 
         var tests = report.Coverage is { } c
             ? $" Test coverage is from {Plural(c.Files.Count, "coverage file")}: a covered line ran during the tests, which doesn't prove a test checks what it does."
@@ -35,28 +54,47 @@ public static class MarkdownReport
         return sb.ToString();
     }
 
-    static void RenderPackage(StringBuilder sb, PackageReport p, string? linkBase, bool coverage)
+    static void RenderPackage(StringBuilder sb, PackageReport p, string? linkBase, bool coverage, IReadOnlyList<PackageReport> dependencies)
     {
-        sb.AppendLine($"### 🦇 {p.Package} {p.FromVersion} → {p.ToVersion}");
+        sb.AppendLine($"### 🦇 {p.Package} {p.FromVersion} → {p.ToVersion}{(p.Via != null ? $" (via {p.Via})" : "")}");
         sb.AppendLine();
+        if (p.Via != null)
+        {
+            sb.AppendLine($"Your projects don't set this package's version: the new {p.Via} needs {p.Package} {p.ToVersion}, so it changes with that bump.");
+            sb.AppendLine();
+        }
 
-        var breaking = p.Used.Where(u => u.Change.Severity == Severity.Breaking).ToList();
-        var files = p.Used.SelectMany(u => u.Locations).Select(l => l.File).Where(f => f != null).Distinct().Count();
+        var runtime = p.Used.Where(u => u.Change.Kind == ChangeKind.RuntimeDependencyMissing).ToList();
+        foreach (var r in runtime)
+        {
+            var c = r.Change;
+            var add = c.Suggestions.FirstOrDefault()?.Split(' ', 2) is [var id, var version]
+                ? $"If your code uses this feature, add the `{Escape(id)}` package ({Escape(version)})."
+                : "If your code uses this feature, add the package that provides it.";
+            sb.AppendLine($"⚠️ **{p.Package} {p.ToVersion} loads `{Escape(c.Subject)}` by name at run time, but nothing in your dependency graph provides it.** {add} The build won't tell you: it only fails when that code runs.");
+            sb.AppendLine($"<sub>{Escape(c.Description)}.</sub>");
+            sb.AppendLine();
+        }
 
-        if (p.Used.Count == 0)
+        var apiUsed = p.Used.Where(u => u.Change.Kind != ChangeKind.RuntimeDependencyMissing).ToList();
+        var breaking = apiUsed.Where(u => u.Change.Severity == Severity.Breaking).ToList();
+        var files = apiUsed.SelectMany(u => u.Locations).Select(l => l.File).Where(f => f != null).Distinct().Count();
+
+        if (apiUsed.Count == 0)
         {
             sb.AppendLine(p.ReferenceCount == 0
-                ? "**Nothing to worry about:** none of your compiled code references this package directly."
+                ? runtime.Count > 0 ? "None of your compiled code references this package directly." : "**Nothing to worry about:** none of your compiled code references this package directly."
+                : runtime.Count > 0 ? $"The API changes don't touch any of the {Plural(p.UsedApiCount, "API")} your code uses ({Plural(p.ReferenceCount, "reference")})."
                 : $"**Looks safe:** this bump doesn't change any of the {Plural(p.UsedApiCount, "API")} your code uses ({Plural(p.ReferenceCount, "reference")}).");
         }
         else
         {
-            var head = $"This bump changes {Plural(p.Used.Count, "API")} you use, in {Plural(files, "file")}.";
+            var head = $"This bump changes {Plural(apiUsed.Count, "API")} you use, in {Plural(files, "file")}.";
             var parts = new List<string>();
             if (breaking.Count > 0) parts.Add($"{breaking.Count} breaking");
-            var bin = p.Used.Count(u => u.Change.Severity == Severity.BinaryOnly);
+            var bin = apiUsed.Count(u => u.Change.Severity == Severity.BinaryOnly);
             if (bin > 0) parts.Add($"{bin} fixed by recompiling");
-            var warn = p.Used.Count(u => u.Change.Severity == Severity.Warning);
+            var warn = apiUsed.Count(u => u.Change.Severity == Severity.Warning);
             if (warn > 0) parts.Add($"{warn} deprecated");
             sb.AppendLine($"{(breaking.Count > 0 ? "❌" : "⚠️")} **{head}** ({string.Join(", ", parts)})");
             sb.AppendLine();
@@ -67,7 +105,7 @@ public static class MarkdownReport
             }
             sb.AppendLine(coverage ? "| | API | Change | Where you use it | Run by tests |" : "| | API | Change | Where you use it |");
             sb.AppendLine(coverage ? "|---|---|---|---|---|" : "|---|---|---|---|");
-            foreach (var u in p.Used)
+            foreach (var u in apiUsed)
             {
                 var where = u.Locations.Take(MaxLinksInTable).Select(l => Link(l, linkBase)).ToList();
                 if (u.Locations.Count > MaxLinksInTable) where.Add($"+{u.Locations.Count - MaxLinksInTable} more");
@@ -75,7 +113,7 @@ public static class MarkdownReport
             }
             sb.AppendLine();
 
-            var detailed = p.Used.Where(u => u.Locations.Count > MaxLinksInTable).ToList();
+            var detailed = apiUsed.Where(u => u.Locations.Count > MaxLinksInTable).ToList();
             if (detailed.Count > 0)
             {
                 sb.AppendLine("<details><summary>All locations</summary>");
@@ -89,6 +127,12 @@ public static class MarkdownReport
                 sb.AppendLine("</details>");
                 sb.AppendLine();
             }
+        }
+
+        if (dependencies.Count > 0)
+        {
+            sb.AppendLine();
+            sb.AppendLine($"⚠️ **Its new version also updates {string.Join(", ", dependencies.Select(d => $"{d.Package} {d.FromVersion} → {d.ToVersion}"))}: see below.**");
         }
 
         var usedIds = p.Used.Select(u => u.Change.Id).ToHashSet();

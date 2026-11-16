@@ -27,7 +27,8 @@ git fetch --no-tags --quiet origin "$PB_BASE" 2>/dev/null || true
 base="$(git merge-base "$PB_BASE" HEAD 2>/dev/null || echo "$PB_BASE")"
 
 pb detect --base "$base" --head HEAD > "$work/bumps.json"
-count="$(jq length "$work/bumps.json")"
+# Packages the PR only adds are listed too (marked added); there is nothing to compare for them.
+count="$(jq '[.[] | select(.added != true)] | length' "$work/bumps.json")"
 if [[ "$count" == "0" ]]; then
   echo "No NuGet package version changes in this PR."
   printf 'breaking=0\nused=0\n' >> "$GITHUB_OUTPUT"
@@ -35,7 +36,7 @@ if [[ "$count" == "0" ]]; then
   exit 0
 fi
 echo "Version changes:"
-jq -r '.[] | "  \(.package) \(.from) -> \(.to)"' "$work/bumps.json"
+jq -r '.[] | if .added == true then "  \(.package) \(.to) (added)" else "  \(.package) \(.from) -> \(.to)" end' "$work/bumps.json"
 
 # Build the code as it was before the bump. It compiled then, and its assemblies + PDBs
 # tell us exactly which package APIs it binds to and on which lines.

@@ -47,6 +47,17 @@ public sealed class AssemblyFuzzTests(ITestOutputHelper output)
             Expected, dll => dll, ".dll");
 
     [Fact]
+    public void Late_bound_scanner_survives_corrupt_package_assemblies() =>
+        Fuzz.Crashes("late-bound-scanner", output, Mutate.Ops.Select(ops => Mutate.Apply(Seeds.LibraryDll, ops)),
+            dll =>
+            {
+                var path = Path.Combine(Fuzz.ScratchDir, "Fuzz.Lib.dll");
+                File.WriteAllBytes(path, dll);
+                _ = LateBoundScanner.Scan(new[] { path });
+            },
+            Expected, dll => dll, ".dll");
+
+    [Fact]
     public void Usage_scanner_survives_corrupt_consumer_assemblies() =>
         Fuzz.Crashes("usage-scanner-dll", output, Mutate.Ops.Select(ops => Mutate.Apply(Seeds.ConsumerDll, ops)),
             dll => Scan(dll, Seeds.ConsumerPdb), Expected, dll => dll, ".dll");
