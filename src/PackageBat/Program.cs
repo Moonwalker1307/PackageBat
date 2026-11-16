@@ -149,20 +149,37 @@ public static class Program
                 bumps = new() { new PackageBump { Ecosystem = eco.Id, Package = args.Require("package"), From = args.Require("from"), To = args.Require("to") } };
             args.EnsureAllUsed();
 
+            // Packages the change adds have nothing to compare, but the run-time check needs to know about them.
+            var direct = bumps.Where(b => b.Added != true).ToList();
+            var transitive = direct.Count == 0 ? Array.Empty<PackageBump>() : await eco.FindTransitiveBumpsAsync(direct, opts);
+            var consumerPackages = bumps.Concat(transitive).Select(b => b.Package).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
             var scanned = new HashSet<string>();
-            foreach (var bump in bumps)
+            foreach (var bump in direct.Concat(transitive))
             {
                 try
                 {
                     var oldApi = await eco.GetApiAsync(bump.Package, bump.From, opts);
-                    var newApi = await eco.GetApiAsync(bump.Package, bump.To, opts);
                     var usages = eco.ScanUsages(opts.ConsumerPaths, oldApi, opts);
+                    var (runtime, runtimeNote) = await RuntimeDependencies(eco, bump, consumerPackages, opts);
+                    if (bump.Via != null && usages.Usages.Count == 0 && runtime.Count == 0 && runtimeNote == null)
+                    {
+                        report.Unreferenced.Add(bump); // a dependency of a dependency that the code doesn't touch: keep the report short
+                        continue;
+                    }
+                    var newApi = await eco.GetApiAsync(bump.Package, bump.To, opts);
                     scanned.UnionWith(usages.Scanned);
-                    report.Packages.Add(UsageMatcher.Analyze(oldApi, newApi, usages));
+                    var package = UsageMatcher.Analyze(oldApi, newApi, usages);
+                    package.Via = bump.Via;
+                    package.AllChanges.AddRange(runtime);
+                    package.Used.InsertRange(0, runtime.Select(c => new UsedChange { Change = c }));
+                    if (runtimeNote != null) package.Notes.Add(runtimeNote);
+                    report.Packages.Add(package);
                 }
                 catch (Exception e) when (e is UsageException or HttpRequestException or IOException or BadImageFormatException)
                 {
                     opts.Log.WriteLine($"warning: skipped {bump.Package}: {e.Message}");
+                    if (bump.Via != null) continue; // e.g. a metapackage with no assemblies: not worth a section of its own
                     report.Packages.Add(new PackageReport
                     {
                         Ecosystem = eco.Id, Package = bump.Package, FromVersion = bump.From, ToVersion = bump.To,
@@ -170,6 +187,7 @@ public static class Program
                     });
                 }
             }
+            report.Packages = DependenciesAfterTheirParents(report.Packages);
             report.Scanned.AddRange(scanned.Order());
         }
 
@@ -185,8 +203,14 @@ public static class Program
         if (jsonOut != null) await File.WriteAllTextAsync(jsonOut, JsonSerializer.Serialize(report, Json));
 
         foreach (var p in report.Packages)
-            opts.Log.WriteLine($"{p.Package} {p.FromVersion} -> {p.ToVersion}: {p.Used.Count} used API(s) changed " +
-                $"({p.Used.Count(u => u.Change.Severity == Severity.Breaking)} breaking), {p.AllChanges.Count} changed in total, {p.ReferenceCount} references scanned.");
+        {
+            var runtime = p.Used.Count(u => u.Change.Kind == ChangeKind.RuntimeDependencyMissing);
+            opts.Log.WriteLine($"{p.Package} {p.FromVersion} -> {p.ToVersion}{(p.Via != null ? $" (via {p.Via})" : "")}: {p.Used.Count - runtime} used API(s) changed " +
+                $"({p.Used.Count(u => u.Change.Severity == Severity.Breaking)} breaking), {p.AllChanges.Count - runtime} changed in total, {p.ReferenceCount} references scanned" +
+                (runtime > 0 ? $", {runtime} missing run-time dependenc{(runtime == 1 ? "y" : "ies")}." : "."));
+        }
+        if (report.Unreferenced.Count > 0)
+            opts.Log.WriteLine($"Also followed {report.Unreferenced.Count} dependency version change(s) that your code doesn't reference.");
 
         if (failOn is { } level)
         {
@@ -198,6 +222,37 @@ public static class Program
             }
         }
         return ExitOk;
+    }
+
+    /// <summary>Puts each transitive bump right after the package that brought it in, so the report reads top-down.</summary>
+    static List<PackageReport> DependenciesAfterTheirParents(List<PackageReport> packages)
+    {
+        var children = packages.Where(p => p.Via != null).ToLookup(p => p.Via!, StringComparer.OrdinalIgnoreCase);
+        var ordered = new List<PackageReport>();
+        var placed = new HashSet<PackageReport>();
+        void Place(PackageReport p)
+        {
+            if (!placed.Add(p)) return;
+            ordered.Add(p);
+            foreach (var c in children[p.Package]) Place(c);
+        }
+        foreach (var p in packages.Where(p => p.Via == null)) Place(p);
+        foreach (var p in packages) Place(p); // parents that were left out of the report
+        return ordered;
+    }
+
+    /// <summary>The run-time check for one bump; a failure becomes a note rather than failing the package.</summary>
+    static async Task<(IReadOnlyList<ApiChange> Changes, string? Note)> RuntimeDependencies(IEcosystem eco, PackageBump bump, IReadOnlyCollection<string> consumerPackages, EcosystemOptions opts)
+    {
+        try
+        {
+            return (await eco.FindMissingRuntimeDependenciesAsync(bump, consumerPackages, opts), null);
+        }
+        catch (Exception e) when (e is UsageException or HttpRequestException or IOException or BadImageFormatException)
+        {
+            opts.Log.WriteLine($"warning: could not check what {bump.Package} {bump.To} loads at run time: {e.Message}");
+            return (Array.Empty<ApiChange>(), $"Could not check what this version loads at run time: {e.Message}");
+        }
     }
 
     static Severity? ParseFailOn(string? value) => value?.ToLowerInvariant() switch

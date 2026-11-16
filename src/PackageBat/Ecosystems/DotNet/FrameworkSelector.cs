@@ -7,10 +7,14 @@ internal static partial class FrameworkSelector
 {
     public sealed record Selection(string Framework, IReadOnlyList<string> Assemblies);
 
-    public static Selection? Select(string packageFolder, string? targetFramework)
+    /// <param name="implementation">
+    /// Pick the assemblies that run (lib/) instead of the ones the compiler sees
+    /// (ref/ first), e.g. to read method bodies, which reference assemblies don't have.
+    /// </param>
+    public static Selection? Select(string packageFolder, string? targetFramework, bool implementation = false)
     {
         // Reference assemblies (ref/) are what the compiler sees; prefer them over lib/.
-        foreach (var root in new[] { "ref", "lib" })
+        foreach (var root in implementation ? new[] { "lib" } : new[] { "ref", "lib" })
         {
             var dir = Path.Combine(packageFolder, root);
             if (!Directory.Exists(dir)) continue;

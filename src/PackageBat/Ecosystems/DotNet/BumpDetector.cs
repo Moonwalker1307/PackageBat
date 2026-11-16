@@ -8,7 +8,8 @@ namespace PackageBat.Ecosystems.DotNet;
 /// Finds NuGet version changes between two git revisions by reading the
 /// project files at both, so it works the same for Dependabot, Renovate and
 /// hand-made PRs. Understands PackageReference, central package management
-/// (PackageVersion in Directory.Packages.props) and packages.config.
+/// (PackageVersion in Directory.Packages.props) and packages.config. Packages
+/// the change adds are listed after the bumps, marked Added.
 /// </summary>
 internal static class BumpDetector
 {
@@ -20,17 +21,29 @@ internal static class BumpDetector
             .ToList();
 
         var bumps = new Dictionary<string, PackageBump>(StringComparer.OrdinalIgnoreCase);
+        var added = new Dictionary<string, PackageBump>(StringComparer.OrdinalIgnoreCase);
+        var hadBefore = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var file in files)
         {
             var before = ReadVersions(TryGit(repoRoot, "show", $"{baseRef}:{file}"));
             var after = ReadVersions(TryGit(repoRoot, "show", $"{headRef}:{file}"));
+            hadBefore.UnionWith(before.Keys);
             foreach (var (id, to) in after)
             {
-                if (!before.TryGetValue(id, out var from) || from == to) continue;
+                if (!before.TryGetValue(id, out var from))
+                {
+                    added.TryAdd(id, new PackageBump { Ecosystem = "dotnet", Package = id, From = "", To = to, File = file, Added = true });
+                    continue;
+                }
+                if (from == to) continue;
                 bumps.TryAdd(id, new PackageBump { Ecosystem = "dotnet", Package = id, From = from, To = to, File = file });
             }
         }
-        return bumps.Values.OrderBy(b => b.Package, StringComparer.OrdinalIgnoreCase).ToList();
+        // A package that only moved between files (say into Directory.Packages.props) wasn't added.
+        return bumps.Values
+            .Concat(added.Values.Where(a => !hadBefore.Contains(a.Package) && !bumps.ContainsKey(a.Package)))
+            .OrderBy(b => b.Added == true).ThenBy(b => b.Package, StringComparer.OrdinalIgnoreCase)
+            .ToList();
     }
 
     static bool IsPackageFile(string path)

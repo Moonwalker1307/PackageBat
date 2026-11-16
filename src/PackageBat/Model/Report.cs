@@ -26,6 +26,12 @@ public enum ChangeKind
     AbstractMemberAdded,
     TypeSealed,
     Deprecated,
+    /// <summary>
+    /// The new version loads a module by name at run time (not through a
+    /// compile-time reference), and nothing in the consumer's dependencies
+    /// provides it. Not an API change, so it has no member and no call site.
+    /// </summary>
+    RuntimeDependencyMissing,
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter<Severity>))]
@@ -46,6 +52,11 @@ public sealed class PackageReport
     public string FromVersion { get; set; } = "";
     public string ToVersion { get; set; } = "";
     public string? Framework { get; set; }
+    /// <summary>
+    /// Set when the consumer doesn't pin this package itself: the bumped package
+    /// whose new version requires this newer version of it.
+    /// </summary>
+    public string? Via { get; set; }
 
     /// <summary>Changes in the package's API that the consumer's code touches.</summary>
     public List<UsedChange> Used { get; set; } = new();
@@ -72,6 +83,11 @@ public sealed class BlastRadiusReport
     public string Tool { get; set; } = "PackageBat";
     public List<PackageReport> Packages { get; set; } = new();
     public List<string> Scanned { get; set; } = new();
+    /// <summary>
+    /// Transitive bumps that were followed but left out of Packages, because
+    /// none of the consumer's code references them and nothing was found.
+    /// </summary>
+    public List<PackageBump> Unreferenced { get; set; } = new();
     /// <summary>Set when coverage files were given: how many affected call sites tests run.</summary>
     public CoverageSummary? Coverage { get; set; }
 
@@ -86,6 +102,14 @@ public sealed class PackageBump
     public string From { get; set; } = "";
     public string To { get; set; } = "";
     public string? File { get; set; }
+    /// <summary>For a transitive bump: the bumped package whose new version requires this one.</summary>
+    public string? Via { get; set; }
+    /// <summary>
+    /// True for a package the change adds rather than bumps (From is empty).
+    /// There is nothing to compare, but it tells the runtime checks that the
+    /// consumer will have the package.
+    /// </summary>
+    public bool? Added { get; set; }
 }
 
 /// <summary>Test coverage of the affected call sites (distinct file:line across all packages).</summary>

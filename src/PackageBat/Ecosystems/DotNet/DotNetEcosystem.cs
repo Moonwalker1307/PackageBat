@@ -14,7 +14,7 @@ public sealed class DotNetEcosystem : IEcosystem
 
     public async Task<ApiSurface> GetApiAsync(string package, string version, EcosystemOptions options, CancellationToken ct = default)
     {
-        var framework = options.Framework ?? InferFramework(options.ConsumerPaths);
+        var framework = Framework(options);
         string folder;
         if (Directory.Exists(version) || File.Exists(version))
         {
@@ -24,7 +24,7 @@ public sealed class DotNetEcosystem : IEcosystem
         }
         else
         {
-            folder = await new NuGetFetcher(options.Source, options.Log).GetPackageFolderAsync(package, version, ct);
+            folder = await Fetcher(options).GetPackageFolderAsync(package, version, ct);
         }
 
         if (File.Exists(folder))
@@ -38,6 +38,22 @@ public sealed class DotNetEcosystem : IEcosystem
 
     public UsageSet ScanUsages(IReadOnlyList<string> consumerPaths, ApiSurface package, EcosystemOptions options) =>
         UsageScanner.Scan(consumerPaths, package, options.RepoRoot, options.Log);
+
+    public Task<IReadOnlyList<PackageBump>> FindTransitiveBumpsAsync(IReadOnlyList<PackageBump> bumps, EcosystemOptions options, CancellationToken ct = default) =>
+        Graph(options).TransitiveBumpsAsync(bumps, ct);
+
+    public Task<IReadOnlyList<ApiChange>> FindMissingRuntimeDependenciesAsync(PackageBump bump, IReadOnlyCollection<string> consumerPackages, EcosystemOptions options, CancellationToken ct = default) =>
+        Graph(options).MissingRuntimeDependenciesAsync(bump, consumerPackages, ct);
+
+    // One fetcher and one graph per options object, so the feed index, nuspecs and
+    // the consumer's restore files are read once per run rather than once per package.
+    readonly System.Runtime.CompilerServices.ConditionalWeakTable<EcosystemOptions, NuGetFetcher> _fetchers = new();
+    readonly System.Runtime.CompilerServices.ConditionalWeakTable<EcosystemOptions, DependencyGraph> _graphs = new();
+
+    NuGetFetcher Fetcher(EcosystemOptions o) => _fetchers.GetValue(o, o => new NuGetFetcher(o.Source, o.Log));
+    DependencyGraph Graph(EcosystemOptions o) => _graphs.GetValue(o, o => new DependencyGraph(Fetcher(o), o, Framework(o)));
+
+    static string? Framework(EcosystemOptions o) => o.Framework ?? InferFramework(o.ConsumerPaths);
 
     /// <summary>Reads [TargetFramework] from the first consumer assembly, so we pick the same package build the consumer compiled against.</summary>
     static string? InferFramework(IReadOnlyList<string> consumerPaths)

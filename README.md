@@ -54,7 +54,8 @@ On every PR that changes a package version (Dependabot, Renovate or by hand) it:
 2. builds your code as it was **before** the bump, which still compiles;
 3. downloads both package versions and compares their public APIs;
 4. scans your compiled assemblies for every reference into the package and maps each one to a file and line through the PDB;
-5. posts one PR comment (updated on each push) and writes the job summary; optionally fails the check.
+5. follows the dependencies the bump changes too, and checks what the new versions load by name at run time;
+6. posts one PR comment (updated on each push) and writes the job summary; optionally fails the check.
 
 | Input | Default | |
 |---|---|---|
@@ -119,12 +120,15 @@ Add `--coverage coverage.cobertura.xml` (repeatable) to `analyze` to include tes
 | ❌ Breaking | `[Obsolete(..., error: true)]` added | use it |
 | 🔁 Recompile | Only optional or `params` parameters added | call it (old binaries break; source still compiles, so check the new parameters mean what you expect) |
 | ⚠️ Warning | `[Obsolete]` added | use it |
+| ⚠️ Warning | New version loads an assembly by name at run time (`Type.GetType("Ns.Type, Some.Assembly")`, `Assembly.Load`) that nothing in your dependency graph provides | depend on the package at all: the build passes and the app fails when that code runs, so the report names the package to add |
 
 Changes that don't touch your code are listed in a collapsed section, so you can still see the whole picture.
 
+**Dependencies that change with a bump.** A package's new version often needs newer versions of its own dependencies, which then change even though no project file mentions them (`Refit.HttpClientFactory` 8 → 16 also takes `Refit` from 8 to 16). PackageBat reads both versions' `.nuspec`, takes the version you had from your build's `obj/project.assets.json`, and analyses each dependency that changes like any other bump, marked *via* the package that brought it in. The ones your code doesn't reference are listed on one line each.
+
 **Why compiled code?** The compiler has already resolved overloads, extension methods, generics and implicit conversions, so PackageBat sees exactly which member each line binds to, with no guessing from source text.
 
-**Not detected (yet):** behaviour changes behind an unchanged signature; changes in a package's *dependencies* (each bumped package is analysed on its own); overrides of members on generic base classes where the signature uses the base's type parameters; version numbers set through MSBuild properties.
+**Not detected (yet):** behaviour changes behind an unchanged signature; dependency changes forced by something other than the bumped packages' own minimum versions; overrides of members on generic base classes where the signature uses the base's type parameters; version numbers set through MSBuild properties.
 
 ## Other languages
 

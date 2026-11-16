@@ -23,6 +23,23 @@ public interface IEcosystem
 
     /// <summary>Finds every reference to the given package's modules in the consumer's code.</summary>
     UsageSet ScanUsages(IReadOnlyList<string> consumerPaths, ApiSurface package, EcosystemOptions options);
+
+    /// <summary>
+    /// Packages the consumer doesn't pin itself whose version changes anyway,
+    /// because the new version of a bumped package requires a newer one. Each
+    /// comes back with Via set to the package that requires it. Optional.
+    /// </summary>
+    Task<IReadOnlyList<PackageBump>> FindTransitiveBumpsAsync(IReadOnlyList<PackageBump> bumps, EcosystemOptions options, CancellationToken ct = default) =>
+        Task.FromResult<IReadOnlyList<PackageBump>>(Array.Empty<PackageBump>());
+
+    /// <summary>
+    /// Modules the bump's new version loads by name at run time (so no API diff
+    /// or reference scan can see them) that nothing in the consumer's dependencies
+    /// provides, as RuntimeDependencyMissing changes. <paramref name="consumerPackages"/>
+    /// are the packages the consumer will have after the change. Optional.
+    /// </summary>
+    Task<IReadOnlyList<ApiChange>> FindMissingRuntimeDependenciesAsync(PackageBump bump, IReadOnlyCollection<string> consumerPackages, EcosystemOptions options, CancellationToken ct = default) =>
+        Task.FromResult<IReadOnlyList<ApiChange>>(Array.Empty<ApiChange>());
 }
 
 public sealed class EcosystemOptions

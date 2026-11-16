@@ -74,7 +74,10 @@ public static class Validation
         {
             var b = bumps[i];
             if (b == null) return $"[{i}] is null";
-            if (string.IsNullOrEmpty(b.Package) || string.IsNullOrEmpty(b.From) || string.IsNullOrEmpty(b.To))
+            if (string.IsNullOrEmpty(b.Package) || string.IsNullOrEmpty(b.To))
+                return $"[{i}] needs package, from and to";
+            if (b.Added == true) b.From ??= "";
+            else if (string.IsNullOrEmpty(b.From))
                 return $"[{i}] needs package, from and to";
             b.Ecosystem ??= "";
         }

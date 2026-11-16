@@ -27,6 +27,48 @@ public sealed class TextFuzzTests(ITestOutputHelper output)
             Gen.Frequency((3, Gen.OneOfConst(ProjectSnippets).Array[0, 14].Select(a => string.Concat(a))), (1, Junk)),
             xml => BumpDetector.ReadVersions(xml), _ => false, System.Text.Encoding.UTF8.GetBytes, ".xml");
 
+    static readonly string[] NuspecSnippets =
+    {
+        "<package>", "</package>", "<metadata>", "</metadata>", "<dependencies>", "</dependencies>", "<group>", "</group>",
+        "<group targetFramework=\"net8.0\">", "<group targetFramework=\".NETFramework4.6.2\">", "<group targetFramework=\"\">",
+        "<group targetFramework=\"net99.0-ios\">", "<dependency id=\"A\" version=\"1.0\" />", "<dependency id=\"B\" version=\"[1.0, 2.0)\" />",
+        "<dependency id=\"\" version=\"\" />", "<dependency id=\"C\" version=\"(,1]\" />", "<dependency id=\"D\" />", "<dependency version=\"1\" />",
+        "<?xml version=\"1.0\"?>", "<!DOCTYPE x [<!ENTITY e \"&e;&e;\">]>", "&e;", "&amp;", "&#0;", "<!--", "-->", "\u0000", "<", ">", "\"",
+    };
+
+    [Fact]
+    public void Nuspec_reader_never_throws() =>
+        Fuzz.Crashes("nuspec", output,
+            Gen.Select(Gen.Frequency((3, Gen.OneOfConst(NuspecSnippets).Array[0, 14].Select(a => string.Concat(a))), (1, Junk)), Tfm.Null()),
+            t =>
+            {
+                foreach (var d in Nuspec.Dependencies(t.Item1, t.Item2))
+                    NuGetVersion.Compare(d.MinVersion, "1.0.0");
+            }, _ => false, t => System.Text.Encoding.UTF8.GetBytes(t.Item1), ".xml");
+
+    [Fact]
+    public void Version_comparison_never_throws_and_is_antisymmetric() =>
+        Fuzz.Property(Gen.Select(Gen.Frequency((3, VersionLike), (1, Junk)), Gen.Frequency((3, VersionLike), (1, Junk))), t =>
+            Assert.Equal(Math.Sign(NuGetVersion.Compare(t.Item1, t.Item2)), -Math.Sign(NuGetVersion.Compare(t.Item2, t.Item1))));
+
+    static readonly string[] AssetsSnippets =
+    {
+        "{", "}", "[", "]", ",", ":", "\"libraries\"", "\"type\"", "\"package\"", "\"project\"", "\"A/1.0.0\"", "\"A/\"", "\"/1.0\"", "\"B/2.0-beta\"",
+        "null", "1", "\"x\"", "\"version\": 3", "\"\\u0000\"", " ",
+    };
+
+    [Fact]
+    public void Restore_output_reader_never_throws() =>
+        Fuzz.Crashes("project-assets", output,
+            Gen.Frequency((3, Gen.OneOfConst(AssetsSnippets).Array[0, 24].Select(a => string.Concat(a))), (1, Junk)),
+            json =>
+            {
+                var obj = Path.Combine(Fuzz.ScratchDir, "proj", "obj");
+                Directory.CreateDirectory(obj);
+                File.WriteAllText(Path.Combine(obj, "project.assets.json"), json);
+                _ = ProjectAssets.Read(new[] { Path.Combine(Fuzz.ScratchDir, "proj") }, TextWriter.Null);
+            }, _ => false, System.Text.Encoding.UTF8.GetBytes, ".json");
+
     static readonly string[] CoverageSnippets =
     {
         "<coverage>", "</coverage>", "<sources>", "</sources>", "<source>", "</source>", "/repo/", "C:\\src\\", "/",
