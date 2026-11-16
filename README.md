@@ -50,7 +50,7 @@ jobs:
 
 On every PR that changes a package version (Dependabot, Renovate or by hand) it:
 
-1. finds the version changes by reading your project files before and after the PR (`PackageReference`, central `Directory.Packages.props`, `packages.config`);
+1. finds the version changes by reading your project files before and after the PR (`PackageReference`, central `Directory.Packages.props`, `packages.config`, and versions set through MSBuild properties such as `Version="$(FooVersion)"`; see [Versions in MSBuild properties](#versions-in-msbuild-properties));
 2. builds your code as it was **before** the bump, which still compiles;
 3. downloads both package versions and compares their public APIs;
 4. scans your compiled assemblies for every reference into the package and maps each one to a file and line through the PDB;
@@ -129,9 +129,11 @@ Changes that don't touch your code are listed in a collapsed section, so you can
 
 **Dependencies that change with a bump.** A package's new version often needs newer versions of its own dependencies, which then change even though no project file mentions them (`Refit.HttpClientFactory` 8 → 16 also takes `Refit` from 8 to 16). PackageBat reads both versions' `.nuspec`, takes the version you had from your build's `obj/project.assets.json`, and analyses each dependency that changes like any other bump, marked *via* the package that brought it in. The ones your code doesn't reference are listed on one line each.
 
+**Versions in MSBuild properties.** `<PackageReference Include="Foo" Version="$(FooVersion)" />` (or a central `PackageVersion` that does the same) is resolved the way the project sees it: a property set in the project file itself, else in the nearest `.props`/`.targets` in its folder or a parent folder (`Directory.Build.props`, `Directory.Packages.props`), else in any other `.props`/`.targets` in the repository when every definition there agrees (a shared versions file such as `eng/Versions.props`). Properties built from other properties (`$(FooMajor).4.0`) are followed. A PR that only edits the property counts as a bump of every package that uses it, reported against the project file that references the package. PackageBat doesn't run MSBuild, so a property set under a build-dependent `Condition` (anything but the `'$(Foo)' == ''` default pattern), set on the command line, or computed with a property function is not known, and versions that use it are skipped as before.
+
 **Why compiled code?** The compiler has already resolved overloads, extension methods, generics and implicit conversions, so PackageBat sees exactly which member each line binds to, with no guessing from source text.
 
-**Not detected (yet):** behaviour changes behind an unchanged signature; dependency changes forced by something other than the bumped packages' own minimum versions; overrides of members on generic base classes where the signature uses the base's type parameters; version numbers set through MSBuild properties.
+**Not detected (yet):** behaviour changes behind an unchanged signature; dependency changes forced by something other than the bumped packages' own minimum versions; overrides of members on generic base classes where the signature uses the base's type parameters.
 
 ## Other languages
 

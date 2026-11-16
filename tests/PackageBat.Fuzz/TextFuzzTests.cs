@@ -21,14 +21,16 @@ public sealed class TextFuzzTests(ITestOutputHelper output)
         "<requireLicenseAcceptance>true</requireLicenseAcceptance>",
         "<?xml version=\"1.0\"?>", "<!DOCTYPE x [<!ENTITY e \"&e;&e;\">]>", "&e;", "&amp;", "&#0;",
         "<PackageReference Include=\"\" Version=\"\" />", "<PackageReference Include=\"E\" VersionOverride=\" [1.0] \" />",
-        "<x:PackageReference xmlns:x=\"urn:x\" Include=\"F\" Version=\"1\" />", "\u0000", "<", ">", "\"", "=",
+        "<x:PackageReference xmlns:x=\"urn:x\" Include=\"F\" Version=\"1\" />",
+        "<PropertyGroup>", "</PropertyGroup>", "<PropertyGroup Condition=\"'$(X)' == ''\">", "<X>", "</X>", "<X Condition=\"'$(X)' == ''\">", "$(X)", "$(X).$(Y)", "$(", "$()",
+        "<PackageReference Include=\"G\" Version=\"$(X)\" />", "<PackageVersion Include=\"H\" Version=\"$(X).0\" />", "\u0000", "<", ">", "\"", "=",
     };
 
     [Fact]
     public void Project_file_reader_never_throws() =>
         Fuzz.Crashes("read-versions", output,
             Gen.Frequency((3, Gen.OneOfConst(ProjectSnippets).Array[0, 14].Select(a => string.Concat(a))), (1, Junk)),
-            xml => BumpDetector.ReadVersions(xml), _ => false, System.Text.Encoding.UTF8.GetBytes, ".xml");
+            xml => BumpDetector.ReadVersions(xml, BumpDetector.ReadProperties(xml).GetValueOrDefault), _ => false, System.Text.Encoding.UTF8.GetBytes, ".xml");
 
     static readonly string[] NuspecSnippets =
     {
