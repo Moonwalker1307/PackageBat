@@ -202,6 +202,15 @@ FUZZ_SEED=<seed> dotnet test tests/PackageBat.Fuzz --filter <test>   # replay a 
 
 Inputs that crash a target are saved under `fuzz-findings/` (the workflow uploads them as an artifact).
 
+## Releasing
+
+Create a GitHub release with a new tag like `v0.3.0` on a commit in `main`. Two workflows then run on the tag:
+
+- [`publish.yml`](.github/workflows/publish.yml) publishes that version of the tool to nuget.org.
+- [`major-tag.yml`](.github/workflows/major-tag.yml) moves `v0` to the same commit, so `@v0` users get the release. Prereleases (`v0.3.0-beta.1`) and tags older than the newest 0.x release leave `v0` alone. To point `v0` at an existing release, run the workflow by hand from the Actions tab with that tag.
+
+Moving `v0` does not publish anything: `publish.yml` only reacts to full `v*.*.*` tags.
+
 ## License
 
 MIT
