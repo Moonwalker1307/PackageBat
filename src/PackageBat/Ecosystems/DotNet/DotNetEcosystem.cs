@@ -45,6 +45,33 @@ public sealed class DotNetEcosystem : IEcosystem
     public Task<IReadOnlyList<ApiChange>> FindMissingRuntimeDependenciesAsync(PackageBump bump, IReadOnlyCollection<string> consumerPackages, EcosystemOptions options, CancellationToken ct = default) =>
         Graph(options).MissingRuntimeDependenciesAsync(bump, consumerPackages, ct);
 
+    public async Task<ApiChange?> FindLicenseChangeAsync(PackageBump bump, EcosystemOptions options, CancellationToken ct = default)
+    {
+        var fetcher = Fetcher(options);
+        var oldLicense = NuspecLicense.Read(await NuspecAsync(fetcher, bump.Package, bump.From, ct));
+        var newLicense = NuspecLicense.Read(await NuspecAsync(fetcher, bump.Package, bump.To, ct));
+        // Both ship a licence file: only then does its text matter (it may mean downloading the package).
+        if (oldLicense?.File is { } oldFile && newLicense?.File is { } newFile)
+        {
+            oldLicense = oldLicense with { Text = await PackageFileAsync(fetcher, bump.Package, bump.From, oldFile, ct) };
+            newLicense = newLicense with { Text = await PackageFileAsync(fetcher, bump.Package, bump.To, newFile, ct) };
+        }
+        return NuspecLicense.Compare(bump.Package, oldLicense, newLicense);
+    }
+
+    /// <summary>A version can be a local package folder (see GetApiAsync).</summary>
+    static async Task<string?> NuspecAsync(NuGetFetcher fetcher, string id, string version, CancellationToken ct) =>
+        Directory.Exists(version)
+            ? NuGetFetcher.FindNuspec(version) is { } local ? await File.ReadAllTextAsync(local, ct) : null
+            : await fetcher.GetNuspecAsync(id, version, ct);
+
+    static async Task<string?> PackageFileAsync(NuGetFetcher fetcher, string id, string version, string path, CancellationToken ct)
+    {
+        if (!Directory.Exists(version)) return await fetcher.GetPackageFileAsync(id, version, path, ct);
+        var file = Path.Combine(version, path.Replace('/', Path.DirectorySeparatorChar));
+        return File.Exists(file) && new FileInfo(file).Length <= NuGetFetcher.MaxLicenseFileBytes ? await File.ReadAllTextAsync(file, ct) : null;
+    }
+
     // One fetcher and one graph per options object, so the feed index, nuspecs and
     // the consumer's restore files are read once per run rather than once per package.
     readonly System.Runtime.CompilerServices.ConditionalWeakTable<EcosystemOptions, NuGetFetcher> _fetchers = new();

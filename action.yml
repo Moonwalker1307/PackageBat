@@ -24,6 +24,9 @@ inputs:
   threshold:
     description: Only fail when more than this many used API changes reach the fail-on level.
     default: '0'
+  fail-on-license-change:
+    description: Fail the check when a bumped package (or a dependency it updates) declares a different licence - true or false.
+    default: 'false'
   coverage:
     description: >-
       Opt-in. Cobertura XML coverage file(s) from your tests, one path or glob per line, relative to the repository root
@@ -44,6 +47,9 @@ outputs:
   used-changes:
     description: Number of changed APIs your code uses, at any severity.
     value: ${{ steps.analyze.outputs.used }}
+  license-changes:
+    description: Number of packages in the change whose licence changed.
+    value: ${{ steps.analyze.outputs.license-changes }}
   untested:
     description: With `coverage` set, the number of affected call sites your tests never run. Empty otherwise.
     value: ${{ steps.analyze.outputs.untested }}
@@ -70,6 +76,7 @@ runs:
         PB_FAIL_ON: ${{ inputs.fail-on }}
         PB_THRESHOLD: ${{ inputs.threshold }}
         PB_COVERAGE: ${{ inputs.coverage }}
+        PB_FAIL_ON_LICENSE: ${{ inputs.fail-on-license-change }}
         PB_COMMENT: ${{ inputs.comment }}
         PB_PR: ${{ github.event.pull_request.number }}
         GH_TOKEN: ${{ inputs.github-token }}

@@ -42,6 +42,7 @@ public static class Program
           --coverage <file>      Cobertura XML coverage from your tests (repeatable). Adds whether tests run each affected line.
           --fail-on <level>      breaking | binary | warning: exit 2 when used changes at or above this level
           --threshold <n>        ...number more than n (default 0).
+          --fail-on-license-change  Exit 2 when a package's licence changes, whatever --fail-on says.
           --ecosystem <id>       Default: dotnet.
 
         detect/api/usages print JSON in PackageBat's language-neutral format,
@@ -52,7 +53,7 @@ public static class Program
     {
         try
         {
-            var args = new Args(argv, new HashSet<string> { "help" });
+            var args = new Args(argv, new HashSet<string> { "help", "fail-on-license-change" });
             if (args.Command is null or "help" || args.Flag("help"))
             {
                 Console.WriteLine(Help);
@@ -121,6 +122,7 @@ public static class Program
         var markdownOut = args.Get("markdown");
         var jsonOut = args.Get("json");
         var failOn = ParseFailOn(args.Get("fail-on"));
+        var failOnLicense = args.Flag("fail-on-license-change");
         var threshold = int.TryParse(args.Get("threshold") ?? "0", out var t) ? t : throw new UsageException("--threshold must be a number.");
         // Read coverage up front so a bad file fails before any download.
         var coverage = args.All("coverage") is { Count: > 0 } coverageFiles ? LineCoverage.Read(coverageFiles) : null;
@@ -157,12 +159,13 @@ public static class Program
             var scanned = new HashSet<string>();
             foreach (var bump in direct.Concat(transitive))
             {
+                var license = await LicenseChange(eco, bump, opts);
                 try
                 {
                     var oldApi = await eco.GetApiAsync(bump.Package, bump.From, opts);
                     var usages = eco.ScanUsages(opts.ConsumerPaths, oldApi, opts);
                     var (runtime, runtimeNote) = await RuntimeDependencies(eco, bump, consumerPackages, opts);
-                    if (bump.Via != null && usages.Usages.Count == 0 && runtime.Count == 0 && runtimeNote == null)
+                    if (bump.Via != null && usages.Usages.Count == 0 && runtime.Count == 0 && runtimeNote == null && license == null)
                     {
                         report.Unreferenced.Add(bump); // a dependency of a dependency that the code doesn't touch: keep the report short
                         continue;
@@ -174,17 +177,29 @@ public static class Program
                     package.AllChanges.AddRange(runtime);
                     package.Used.InsertRange(0, runtime.Select(c => new UsedChange { Change = c }));
                     if (runtimeNote != null) package.Notes.Add(runtimeNote);
+                    if (license != null)
+                    {
+                        package.AllChanges.Insert(0, license);
+                        package.Used.Insert(0, new UsedChange { Change = license });
+                    }
                     report.Packages.Add(package);
                 }
                 catch (Exception e) when (e is UsageException or HttpRequestException or IOException or BadImageFormatException)
                 {
                     opts.Log.WriteLine($"warning: skipped {bump.Package}: {e.Message}");
-                    if (bump.Via != null) continue; // e.g. a metapackage with no assemblies: not worth a section of its own
-                    report.Packages.Add(new PackageReport
+                    // e.g. a metapackage with no assemblies: not worth a section of its own, unless its licence changed
+                    if (bump.Via != null && license == null) continue;
+                    var failed = new PackageReport
                     {
-                        Ecosystem = eco.Id, Package = bump.Package, FromVersion = bump.From, ToVersion = bump.To,
+                        Ecosystem = eco.Id, Package = bump.Package, FromVersion = bump.From, ToVersion = bump.To, Via = bump.Via,
                         Notes = { $"Could not analyze this package: {e.Message}" },
-                    });
+                    };
+                    if (license != null)
+                    {
+                        failed.AllChanges.Add(license);
+                        failed.Used.Add(new UsedChange { Change = license });
+                    }
+                    report.Packages.Add(failed);
                 }
             }
             report.Packages = DependenciesAfterTheirParents(report.Packages);
@@ -205,13 +220,21 @@ public static class Program
         foreach (var p in report.Packages)
         {
             var runtime = p.Used.Count(u => u.Change.Kind == ChangeKind.RuntimeDependencyMissing);
-            opts.Log.WriteLine($"{p.Package} {p.FromVersion} -> {p.ToVersion}{(p.Via != null ? $" (via {p.Via})" : "")}: {p.Used.Count - runtime} used API(s) changed " +
-                $"({p.Used.Count(u => u.Change.Severity == Severity.Breaking)} breaking), {p.AllChanges.Count - runtime} changed in total, {p.ReferenceCount} references scanned" +
-                (runtime > 0 ? $", {runtime} missing run-time dependenc{(runtime == 1 ? "y" : "ies")}." : "."));
+            var license = p.Used.FirstOrDefault(u => u.Change.Kind == ChangeKind.LicenseChanged)?.Change;
+            var notApi = runtime + (license != null ? 1 : 0);
+            opts.Log.WriteLine($"{p.Package} {p.FromVersion} -> {p.ToVersion}{(p.Via != null ? $" (via {p.Via})" : "")}: {p.Used.Count - notApi} used API(s) changed " +
+                $"({p.Used.Count(u => u.Change.Severity == Severity.Breaking)} breaking), {p.AllChanges.Count - notApi} changed in total, {p.ReferenceCount} references scanned" +
+                (runtime > 0 ? $", {runtime} missing run-time dependenc{(runtime == 1 ? "y" : "ies")}" : "") +
+                (license != null ? $", licence changed ({license.Subject})." : "."));
         }
         if (report.Unreferenced.Count > 0)
             opts.Log.WriteLine($"Also followed {report.Unreferenced.Count} dependency version change(s) that your code doesn't reference.");
 
+        if (failOnLicense && report.Packages.Where(p => p.Used.Any(u => u.Change.Kind == ChangeKind.LicenseChanged)).Select(p => p.Package).ToList() is { Count: > 0 } relicensed)
+        {
+            opts.Log.WriteLine($"Failing: the licence changed for {string.Join(", ", relicensed)}.");
+            return ExitThreshold;
+        }
         if (failOn is { } level)
         {
             var count = report.Packages.Sum(p => p.Used.Count(u => u.Change.Severity <= level));
@@ -239,6 +262,20 @@ public static class Program
         foreach (var p in packages.Where(p => p.Via == null)) Place(p);
         foreach (var p in packages) Place(p); // parents that were left out of the report
         return ordered;
+    }
+
+    /// <summary>The licence check for one bump; a failure is logged and treated as no change (the API steps report download problems).</summary>
+    static async Task<ApiChange?> LicenseChange(IEcosystem eco, PackageBump bump, EcosystemOptions opts)
+    {
+        try
+        {
+            return await eco.FindLicenseChangeAsync(bump, opts);
+        }
+        catch (Exception e) when (e is UsageException or HttpRequestException or IOException or System.IO.InvalidDataException)
+        {
+            opts.Log.WriteLine($"warning: could not compare the licences of {bump.Package} {bump.From} and {bump.To}: {e.Message}");
+            return null;
+        }
     }
 
     /// <summary>The run-time check for one bump; a failure becomes a note rather than failing the package.</summary>

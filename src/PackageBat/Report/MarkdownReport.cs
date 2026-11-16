@@ -64,6 +64,13 @@ public static class MarkdownReport
             sb.AppendLine();
         }
 
+        if (p.Used.FirstOrDefault(u => u.Change.Kind == ChangeKind.LicenseChanged)?.Change is { } license)
+        {
+            sb.AppendLine($"⚠️ **The licence changed: {Escape(license.Subject)}.** It applies to the whole package, whatever your code uses, so check that the new terms still allow how you use and ship it.");
+            sb.AppendLine($"<sub>{Escape(license.Description)}.</sub>");
+            sb.AppendLine();
+        }
+
         var runtime = p.Used.Where(u => u.Change.Kind == ChangeKind.RuntimeDependencyMissing).ToList();
         foreach (var r in runtime)
         {
@@ -76,15 +83,16 @@ public static class MarkdownReport
             sb.AppendLine();
         }
 
-        var apiUsed = p.Used.Where(u => u.Change.Kind != ChangeKind.RuntimeDependencyMissing).ToList();
+        var apiUsed = p.Used.Where(u => u.Change.Kind is not (ChangeKind.RuntimeDependencyMissing or ChangeKind.LicenseChanged)).ToList();
+        var other = p.Used.Count - apiUsed.Count; // findings above that aren't about the API
         var breaking = apiUsed.Where(u => u.Change.Severity == Severity.Breaking).ToList();
         var files = apiUsed.SelectMany(u => u.Locations).Select(l => l.File).Where(f => f != null).Distinct().Count();
 
         if (apiUsed.Count == 0)
         {
             sb.AppendLine(p.ReferenceCount == 0
-                ? runtime.Count > 0 ? "None of your compiled code references this package directly." : "**Nothing to worry about:** none of your compiled code references this package directly."
-                : runtime.Count > 0 ? $"The API changes don't touch any of the {Plural(p.UsedApiCount, "API")} your code uses ({Plural(p.ReferenceCount, "reference")})."
+                ? other > 0 ? "None of your compiled code references this package directly." : "**Nothing to worry about:** none of your compiled code references this package directly."
+                : other > 0 ? $"The API changes don't touch any of the {Plural(p.UsedApiCount, "API")} your code uses ({Plural(p.ReferenceCount, "reference")})."
                 : $"**Looks safe:** this bump doesn't change any of the {Plural(p.UsedApiCount, "API")} your code uses ({Plural(p.ReferenceCount, "reference")}).");
         }
         else
