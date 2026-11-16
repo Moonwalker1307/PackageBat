@@ -49,11 +49,13 @@ internal sealed class NuGetFetcher
             ?? throw new UsageException($"Could not download {id} {version} from {_source} (not found)."))
         using (var zip = new ZipArchive(s, ZipArchiveMode.Read))
         {
+            var licenseFile = LicenseFileIn(zip);
             foreach (var entry in zip.Entries)
             {
-                // Only assemblies and the manifest matter; also keeps us clear of odd paths in the archive.
+                // Only assemblies, the manifest and the licence file matter; also keeps us clear of odd paths in the archive.
                 if (!entry.FullName.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)
-                    && !(entry.FullName.EndsWith(".nuspec", StringComparison.OrdinalIgnoreCase) && !entry.FullName.Contains('/'))) continue;
+                    && !IsManifest(entry)
+                    && !(licenseFile != null && SamePath(entry, licenseFile))) continue;
                 var dest = Path.GetFullPath(Path.Combine(tmp, Uri.UnescapeDataString(entry.FullName)));
                 if (!dest.StartsWith(Path.GetFullPath(tmp) + Path.DirectorySeparatorChar, StringComparison.Ordinal)) continue;
                 Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
@@ -89,6 +91,73 @@ internal sealed class NuGetFetcher
         await File.WriteAllTextAsync(tmp, text, ct);
         File.Move(tmp, target, overwrite: true);
         return text;
+    }
+
+    /// <summary>Licence files bigger than this are not read; nobody's licence is a megabyte.</summary>
+    internal const int MaxLicenseFileBytes = 1 << 20;
+
+    /// <summary>
+    /// The text of a file inside the package (its licence file), or null when
+    /// the package doesn't have it. Read from the restored or extracted package
+    /// when it's there; otherwise the package is downloaded and only that file kept.
+    /// </summary>
+    public async Task<string?> GetPackageFileAsync(string id, string version, string path, CancellationToken ct)
+    {
+        var lowerId = id.ToLowerInvariant();
+        var lowerVer = NormalizeVersion(version).ToLowerInvariant();
+        var relative = path.Replace('\\', '/').TrimStart('/');
+        if (relative.Length == 0 || relative.Split('/').Any(p => p is "" or "." or "..")) return null;
+        var native = relative.Replace('/', Path.DirectorySeparatorChar);
+        var files = Path.Combine(CacheRoot, "files", lowerId, lowerVer);
+        foreach (var folder in new[] { Path.Combine(GlobalPackagesFolder, lowerId, lowerVer), Path.Combine(CacheRoot, lowerId, lowerVer), files })
+        {
+            var candidate = Path.Combine(folder, native);
+            if (File.Exists(candidate)) return ReadLimited(File.OpenRead(candidate));
+        }
+        if (File.Exists(Path.Combine(files, ".missing"))) return null;
+
+        await using var s = await OpenAsync($"{lowerId}/{lowerVer}/{lowerId}.{lowerVer}.nupkg", $"{id} {version}", ct);
+        if (s == null) return null;
+        string? text;
+        using (var zip = new ZipArchive(s, ZipArchiveMode.Read))
+            text = zip.Entries.FirstOrDefault(e => SamePath(e, relative)) is { } entry ? ReadLimited(entry.Open()) : null;
+        Directory.CreateDirectory(files);
+        if (text == null) { await File.WriteAllTextAsync(Path.Combine(files, ".missing"), "", ct); return null; }
+        var target = Path.Combine(files, native);
+        Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+        var tmp = target + ".tmp-" + Guid.NewGuid().ToString("N");
+        await File.WriteAllTextAsync(tmp, text, ct);
+        File.Move(tmp, target, overwrite: true);
+        return text;
+    }
+
+    static string? ReadLimited(Stream s)
+    {
+        using (s)
+        {
+            var buffer = new byte[MaxLicenseFileBytes + 1];
+            int total = 0, n;
+            while (total < buffer.Length && (n = s.Read(buffer, total, buffer.Length - total)) > 0) total += n;
+            return total > MaxLicenseFileBytes ? null : System.Text.Encoding.UTF8.GetString(buffer, 0, total);
+        }
+    }
+
+    static bool IsManifest(ZipArchiveEntry e) =>
+        e.FullName.EndsWith(".nuspec", StringComparison.OrdinalIgnoreCase) && !e.FullName.Contains('/');
+
+    static bool SamePath(ZipArchiveEntry e, string relative) =>
+        string.Equals(Uri.UnescapeDataString(e.FullName).Replace('\\', '/'), relative, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>The licence file the package's manifest names, if any.</summary>
+    static string? LicenseFileIn(ZipArchive zip)
+    {
+        if (zip.Entries.FirstOrDefault(IsManifest) is not { } manifest) return null;
+        try
+        {
+            using var reader = new StreamReader(manifest.Open());
+            return NuspecLicense.Read(reader.ReadToEnd())?.File;
+        }
+        catch (Exception e) when (e is IOException or InvalidDataException) { return null; }
     }
 
     /// <summary>The .nuspec at the top of an extracted package folder, if any.</summary>

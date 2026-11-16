@@ -16,7 +16,10 @@ public sealed class TextFuzzTests(ITestOutputHelper output)
         "<Project>", "</Project>", "<ItemGroup>", "</ItemGroup>", "<PackageReference Include=\"A\" Version=\"1.0.0\" />",
         "<PackageVersion Include=\"B\" Version=\"[2.0]\" />", "<PackageReference Update=\"C\"><Version>3.0</Version></PackageReference>",
         "<package id=\"D\" version=\"4.0\" />", "<packages>", "</packages>", "<Version>", "</Version>", "<!--", "-->",
-        "<![CDATA[", "]]>", "<?xml version=\"1.0\"?>", "<!DOCTYPE x [<!ENTITY e \"&e;&e;\">]>", "&e;", "&amp;", "&#0;",
+        "<![CDATA[", "]]>", "<license type=\"expression\">MIT</license>", "<license type=\"file\">..\\LICENSE</license>", "<license type=\"FILE\">", "</license>", "<license>",
+        "<licenseUrl>https://licenses.nuget.org/MIT</licenseUrl>", "<licenseUrl>https://aka.ms/deprecateLicenseUrl</licenseUrl>", "<licenseUrl>",
+        "<requireLicenseAcceptance>true</requireLicenseAcceptance>",
+        "<?xml version=\"1.0\"?>", "<!DOCTYPE x [<!ENTITY e \"&e;&e;\">]>", "&e;", "&amp;", "&#0;",
         "<PackageReference Include=\"\" Version=\"\" />", "<PackageReference Include=\"E\" VersionOverride=\" [1.0] \" />",
         "<x:PackageReference xmlns:x=\"urn:x\" Include=\"F\" Version=\"1\" />", "\u0000", "<", ">", "\"", "=",
     };
@@ -44,6 +47,10 @@ public sealed class TextFuzzTests(ITestOutputHelper output)
             {
                 foreach (var d in Nuspec.Dependencies(t.Item1, t.Item2))
                     NuGetVersion.Compare(d.MinVersion, "1.0.0");
+                var license = NuspecLicense.Read(t.Item1);
+                NuspecLicense.Compare("A", license, NuspecLicense.Read("<package><metadata><license type=\"expression\">MIT</license></metadata></package>"));
+                NuspecLicense.Compare("A", license, license);
+                license?.Describe();
             }, _ => false, t => System.Text.Encoding.UTF8.GetBytes(t.Item1), ".xml");
 
     [Fact]

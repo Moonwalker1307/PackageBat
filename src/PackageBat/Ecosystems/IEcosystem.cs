@@ -40,6 +40,14 @@ public interface IEcosystem
     /// </summary>
     Task<IReadOnlyList<ApiChange>> FindMissingRuntimeDependenciesAsync(PackageBump bump, IReadOnlyCollection<string> consumerPackages, EcosystemOptions options, CancellationToken ct = default) =>
         Task.FromResult<IReadOnlyList<ApiChange>>(Array.Empty<ApiChange>());
+
+    /// <summary>
+    /// A LicenseChanged change when the licence the bump's new version declares
+    /// differs from the old one's, otherwise null. It applies to the whole
+    /// package, whatever the consumer's code uses. Optional.
+    /// </summary>
+    Task<ApiChange?> FindLicenseChangeAsync(PackageBump bump, EcosystemOptions options, CancellationToken ct = default) =>
+        Task.FromResult<ApiChange?>(null);
 }
 
 public sealed class EcosystemOptions

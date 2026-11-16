@@ -64,11 +64,12 @@ On every PR that changes a package version (Dependabot, Renovate or by hand) it:
 | `dotnet-version` | `8.0.x` | SDKs to install (one per line). Add yours if your code targets something newer. |
 | `fail-on` | `none` | `breaking`, `binary` or `warning`: fail when used changes reach this level. |
 | `threshold` | `0` | Only fail when more than this many used changes reach `fail-on`. |
+| `fail-on-license-change` | `false` | `true`: fail when a bumped package, or a dependency it updates, declares a different licence. |
 | `coverage` | | Opt-in. Cobertura coverage file(s) from your tests, one path or glob per line. See [Test coverage](#test-coverage-opt-in). |
 | `comment` | `true` | Post the report as a PR comment. |
 | `base-ref` | PR base | What to compare against. |
 
-Outputs: `breaking`, `used-changes`, `untested` (with `coverage`: affected call sites your tests never run), `report` (Markdown path), `report-json`.
+Outputs: `breaking`, `used-changes`, `license-changes` (packages whose licence changed), `untested` (with `coverage`: affected call sites your tests never run), `report` (Markdown path), `report-json`.
 
 ### Test coverage (opt-in)
 
@@ -106,7 +107,7 @@ packagebat analyze --base origin/main --consumer . --markdown report.md --json r
 
 Add `--coverage coverage.cobertura.xml` (repeatable) to `analyze` to include test coverage.
 
-`--consumer` takes built assemblies or folders to search (anything with a `.pdb` next to it, `obj/` skipped). Run `packagebat help` for all options. Exit codes: `0` ok, `1` error, `2` over the `--fail-on` threshold.
+`--consumer` takes built assemblies or folders to search (anything with a `.pdb` next to it, `obj/` skipped). Run `packagebat help` for all options. Exit codes: `0` ok, `1` error, `2` over the `--fail-on` threshold (or a licence change with `--fail-on-license-change`).
 
 ## What it detects
 
@@ -121,6 +122,7 @@ Add `--coverage coverage.cobertura.xml` (repeatable) to `analyze` to include tes
 | 🔁 Recompile | Only optional or `params` parameters added | call it (old binaries break; source still compiles, so check the new parameters mean what you expect) |
 | ⚠️ Warning | `[Obsolete]` added | use it |
 | ⚠️ Warning | New version loads an assembly by name at run time (`Type.GetType("Ns.Type, Some.Assembly")`, `Assembly.Load`) that nothing in your dependency graph provides | depend on the package at all: the build passes and the app fails when that code runs, so the report names the package to add |
+| ⚠️ Warning | Licence changed: a different SPDX expression (`MIT` → `BUSL-1.1`), a switch to or from a licence file, a licence file whose text changed, or the package newly requiring licence acceptance | depend on the package at all, including through a dependency it updates. Add `--fail-on-license-change` to fail the check on it |
 
 Changes that don't touch your code are listed in a collapsed section, so you can still see the whole picture.
 

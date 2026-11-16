@@ -91,6 +91,11 @@ if [[ -n "${PB_COVERAGE:-}" ]]; then
   shopt -u globstar nullglob
 fi
 
+license_args=()
+if [[ "${PB_FAIL_ON_LICENSE:-false}" == "true" ]]; then
+  license_args=(--fail-on-license-change)
+fi
+
 server="${GITHUB_SERVER_URL:-https://github.com}"
 set +e
 pb analyze \
@@ -102,7 +107,8 @@ pb analyze \
   --json "$json" \
   --fail-on "${PB_FAIL_ON:-none}" \
   --threshold "${PB_THRESHOLD:-0}" \
-  "${coverage_args[@]}"
+  "${coverage_args[@]}" \
+  "${license_args[@]}"
 status=$?
 set -e
 
@@ -113,6 +119,7 @@ fi
 
 echo "breaking=$(jq '[.packages[].used[] | select(.change.severity == "Breaking")] | length' "$json")" >> "$GITHUB_OUTPUT"
 echo "used=$(jq '[.packages[].used[]] | length' "$json")" >> "$GITHUB_OUTPUT"
+echo "license-changes=$(jq '[.packages[] | select(any(.used[]; .change.kind == "LicenseChanged"))] | length' "$json")" >> "$GITHUB_OUTPUT"
 echo "untested=$(jq -r '.coverage.notCovered // ""' "$json")" >> "$GITHUB_OUTPUT"
 cat "$report" >> "$GITHUB_STEP_SUMMARY"
 

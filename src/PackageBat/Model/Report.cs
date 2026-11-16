@@ -32,6 +32,11 @@ public enum ChangeKind
     /// provides it. Not an API change, so it has no member and no call site.
     /// </summary>
     RuntimeDependencyMissing,
+    /// <summary>
+    /// The new version declares a different licence (or a changed licence
+    /// file). Applies to the whole package, so it has no member and no call site.
+    /// </summary>
+    LicenseChanged,
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter<Severity>))]
