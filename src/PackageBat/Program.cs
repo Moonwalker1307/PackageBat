@@ -159,13 +159,15 @@ public static class Program
             var scanned = new HashSet<string>();
             foreach (var bump in direct.Concat(transitive))
             {
-                var license = await LicenseChange(eco, bump, opts);
+                var packageLevel = new List<ApiChange>();
+                if (await LicenseChange(eco, bump, opts) is { } license) packageLevel.Add(license);
+                if (VersionMismatch(bump) is { } mismatch) packageLevel.Add(mismatch);
                 try
                 {
                     var oldApi = await eco.GetApiAsync(bump.Package, bump.From, opts);
                     var usages = eco.ScanUsages(opts.ConsumerPaths, oldApi, opts);
                     var (runtime, runtimeNote) = await RuntimeDependencies(eco, bump, consumerPackages, opts);
-                    if (bump.Via != null && usages.Usages.Count == 0 && runtime.Count == 0 && runtimeNote == null && license == null)
+                    if (bump.Via != null && usages.Usages.Count == 0 && runtime.Count == 0 && runtimeNote == null && packageLevel.Count == 0)
                     {
                         report.Unreferenced.Add(bump); // a dependency of a dependency that the code doesn't touch: keep the report short
                         continue;
@@ -177,28 +179,22 @@ public static class Program
                     package.AllChanges.AddRange(runtime);
                     package.Used.InsertRange(0, runtime.Select(c => new UsedChange { Change = c }));
                     if (runtimeNote != null) package.Notes.Add(runtimeNote);
-                    if (license != null)
-                    {
-                        package.AllChanges.Insert(0, license);
-                        package.Used.Insert(0, new UsedChange { Change = license });
-                    }
+                    package.AllChanges.InsertRange(0, packageLevel);
+                    package.Used.InsertRange(0, packageLevel.Select(c => new UsedChange { Change = c }));
                     report.Packages.Add(package);
                 }
                 catch (Exception e) when (e is UsageException or HttpRequestException or IOException or BadImageFormatException)
                 {
                     opts.Log.WriteLine($"warning: skipped {bump.Package}: {e.Message}");
                     // e.g. a metapackage with no assemblies: not worth a section of its own, unless its licence changed
-                    if (bump.Via != null && license == null) continue;
+                    if (bump.Via != null && packageLevel.Count == 0) continue;
                     var failed = new PackageReport
                     {
                         Ecosystem = eco.Id, Package = bump.Package, FromVersion = bump.From, ToVersion = bump.To, Via = bump.Via,
                         Notes = { $"Could not analyze this package: {e.Message}" },
                     };
-                    if (license != null)
-                    {
-                        failed.AllChanges.Add(license);
-                        failed.Used.Add(new UsedChange { Change = license });
-                    }
+                    failed.AllChanges.AddRange(packageLevel);
+                    failed.Used.AddRange(packageLevel.Select(c => new UsedChange { Change = c }));
                     report.Packages.Add(failed);
                 }
             }
@@ -221,11 +217,13 @@ public static class Program
         {
             var runtime = p.Used.Count(u => u.Change.Kind == ChangeKind.RuntimeDependencyMissing);
             var license = p.Used.FirstOrDefault(u => u.Change.Kind == ChangeKind.LicenseChanged)?.Change;
-            var notApi = runtime + (license != null ? 1 : 0);
+            var mismatch = p.Used.FirstOrDefault(u => u.Change.Kind == ChangeKind.VersionMismatch)?.Change;
+            var notApi = p.Used.Count(u => u.Change.Kind.IsPackageLevel());
             opts.Log.WriteLine($"{p.Package} {p.FromVersion} -> {p.ToVersion}{(p.Via != null ? $" (via {p.Via})" : "")}: {p.Used.Count - notApi} used API(s) changed " +
                 $"({p.Used.Count(u => u.Change.Severity == Severity.Breaking)} breaking), {p.AllChanges.Count - notApi} changed in total, {p.ReferenceCount} references scanned" +
                 (runtime > 0 ? $", {runtime} missing run-time dependenc{(runtime == 1 ? "y" : "ies")}" : "") +
-                (license != null ? $", licence changed ({license.Subject})." : "."));
+                (license != null ? $", licence changed ({license.Subject})" : "") +
+                (mismatch != null ? $", other versions still set in {mismatch.Subject}." : "."));
         }
         if (report.Unreferenced.Count > 0)
             opts.Log.WriteLine($"Also followed {report.Unreferenced.Count} dependency version change(s) that your code doesn't reference.");
@@ -262,6 +260,22 @@ public static class Program
         foreach (var p in packages.Where(p => p.Via == null)) Place(p);
         foreach (var p in packages) Place(p); // parents that were left out of the report
         return ordered;
+    }
+
+    /// <summary>A VersionMismatch change when other project files still set a different version of the bumped package.</summary>
+    internal static ApiChange? VersionMismatch(PackageBump bump)
+    {
+        if (bump.Elsewhere is not { Count: > 0 } elsewhere) return null;
+        var files = elsewhere.Select(e => $"{e.File} ({e.Version})").ToList();
+        return new ApiChange
+        {
+            Id = $"version-mismatch:{bump.Package}",
+            Kind = ChangeKind.VersionMismatch,
+            Severity = Severity.Warning,
+            Subject = string.Join(", ", elsewhere.Select(e => e.File).Distinct()),
+            Description = $"{(files.Count == 1 ? "1 other file still sets" : $"{files.Count} other files still set")} {bump.Package} to a version other than {bump.To}: {string.Join(", ", files)}",
+            Suggestions = elsewhere.Select(e => e.Version).Distinct().ToList(),
+        };
     }
 
     /// <summary>The licence check for one bump; a failure is logged and treated as no change (the API steps report download problems).</summary>

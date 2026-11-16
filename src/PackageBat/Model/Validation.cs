@@ -80,6 +80,11 @@ public static class Validation
             else if (string.IsNullOrEmpty(b.From))
                 return $"[{i}] needs package, from and to";
             b.Ecosystem ??= "";
+            if (b.Elsewhere != null)
+            {
+                if (b.Elsewhere.Any(p => p == null || string.IsNullOrEmpty(p.File) || p.Version == null))
+                    return $"[{i}].elsewhere entries need file and version";
+            }
         }
         return null;
     }
