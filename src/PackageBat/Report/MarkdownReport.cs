@@ -71,6 +71,12 @@ public static class MarkdownReport
             sb.AppendLine();
         }
 
+        if (p.Used.FirstOrDefault(u => u.Change.Kind == ChangeKind.VersionMismatch)?.Change is { } mismatch)
+        {
+            sb.AppendLine($"⚠️ **Not every project moves to {Escape(p.ToVersion)}:** {Escape(mismatch.Description)}. Projects that end up in one app get only one version at run time, so code built against the other one can fail there.");
+            sb.AppendLine();
+        }
+
         var runtime = p.Used.Where(u => u.Change.Kind == ChangeKind.RuntimeDependencyMissing).ToList();
         foreach (var r in runtime)
         {
@@ -83,7 +89,7 @@ public static class MarkdownReport
             sb.AppendLine();
         }
 
-        var apiUsed = p.Used.Where(u => u.Change.Kind is not (ChangeKind.RuntimeDependencyMissing or ChangeKind.LicenseChanged)).ToList();
+        var apiUsed = p.Used.Where(u => !u.Change.Kind.IsPackageLevel()).ToList();
         var other = p.Used.Count - apiUsed.Count; // findings above that aren't about the API
         var breaking = apiUsed.Where(u => u.Change.Severity == Severity.Breaking).ToList();
         var files = apiUsed.SelectMany(u => u.Locations).Select(l => l.File).Where(f => f != null).Distinct().Count();

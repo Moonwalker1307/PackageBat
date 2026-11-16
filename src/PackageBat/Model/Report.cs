@@ -37,6 +37,22 @@ public enum ChangeKind
     /// file). Applies to the whole package, so it has no member and no call site.
     /// </summary>
     LicenseChanged,
+    /// <summary>
+    /// The change moves the package to a new version in some project files,
+    /// while others in the repository still set a different version. Not an
+    /// API change, so it has no member and no call site.
+    /// </summary>
+    VersionMismatch,
+}
+
+public static class ChangeKinds
+{
+    /// <summary>
+    /// Findings about the package as a whole rather than one of its APIs:
+    /// they have no call sites and are shown above the API table.
+    /// </summary>
+    public static bool IsPackageLevel(this ChangeKind kind) =>
+        kind is ChangeKind.RuntimeDependencyMissing or ChangeKind.LicenseChanged or ChangeKind.VersionMismatch;
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter<Severity>))]
@@ -115,6 +131,19 @@ public sealed class PackageBump
     /// consumer will have the package.
     /// </summary>
     public bool? Added { get; set; }
+    /// <summary>
+    /// Other project files that still set a different version of this package
+    /// after the change (e.g. a project the PR didn't update). Null or empty when
+    /// every file that sets it agrees.
+    /// </summary>
+    public List<PinnedVersion>? Elsewhere { get; set; }
+}
+
+/// <summary>A version of a package that one file in the repository sets.</summary>
+public sealed class PinnedVersion
+{
+    public string File { get; set; } = "";
+    public string Version { get; set; } = "";
 }
 
 /// <summary>Test coverage of the affected call sites (distinct file:line across all packages).</summary>

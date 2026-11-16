@@ -122,6 +122,7 @@ Add `--coverage coverage.cobertura.xml` (repeatable) to `analyze` to include tes
 | 🔁 Recompile | Only optional or `params` parameters added | call it (old binaries break; source still compiles, so check the new parameters mean what you expect) |
 | ⚠️ Warning | `[Obsolete]` added | use it |
 | ⚠️ Warning | New version loads an assembly by name at run time (`Type.GetType("Ns.Type, Some.Assembly")`, `Assembly.Load`) that nothing in your dependency graph provides | depend on the package at all: the build passes and the app fails when that code runs, so the report names the package to add |
+| ⚠️ Warning | Not every project moves to the new version: other project files (or a `VersionOverride`) in the repository still set the package to another version after the change | build those projects into the same app: only one version loads at run time, so code built against the other one can fail. The report lists each file and its version |
 | ⚠️ Warning | Licence changed: a different SPDX expression (`MIT` → `BUSL-1.1`), a switch to or from a licence file, a licence file whose text changed, or the package newly requiring licence acceptance | depend on the package at all, including through a dependency it updates. Add `--fail-on-license-change` to fail the check on it |
 
 Changes that don't touch your code are listed in a collapsed section, so you can still see the whole picture.

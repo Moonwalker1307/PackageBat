@@ -9,7 +9,9 @@ namespace PackageBat.Ecosystems.DotNet;
 /// project files at both, so it works the same for Dependabot, Renovate and
 /// hand-made PRs. Understands PackageReference, central package management
 /// (PackageVersion in Directory.Packages.props) and packages.config. Packages
-/// the change adds are listed after the bumps, marked Added.
+/// the change adds are listed after the bumps, marked Added. Each bump also
+/// lists the other project files that still set a different version at the head
+/// revision (Elsewhere), such as a project the PR didn't update.
 /// </summary>
 internal static class BumpDetector
 {
@@ -23,10 +25,11 @@ internal static class BumpDetector
         var bumps = new Dictionary<string, PackageBump>(StringComparer.OrdinalIgnoreCase);
         var added = new Dictionary<string, PackageBump>(StringComparer.OrdinalIgnoreCase);
         var hadBefore = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var atHead = new Dictionary<string, Dictionary<string, string>>(StringComparer.Ordinal);
         foreach (var file in files)
         {
             var before = ReadVersions(TryGit(repoRoot, "show", $"{baseRef}:{file}"));
-            var after = ReadVersions(TryGit(repoRoot, "show", $"{headRef}:{file}"));
+            var after = atHead[file] = ReadVersions(TryGit(repoRoot, "show", $"{headRef}:{file}"));
             hadBefore.UnionWith(before.Keys);
             foreach (var (id, to) in after)
             {
@@ -39,11 +42,36 @@ internal static class BumpDetector
                 bumps.TryAdd(id, new PackageBump { Ecosystem = "dotnet", Package = id, From = from, To = to, File = file });
             }
         }
+        if (bumps.Count > 0) AddElsewhere(repoRoot, headRef, bumps.Values, atHead);
+
         // A package that only moved between files (say into Directory.Packages.props) wasn't added.
         return bumps.Values
             .Concat(added.Values.Where(a => !hadBefore.Contains(a.Package) && !bumps.ContainsKey(a.Package)))
             .OrderBy(b => b.Added == true).ThenBy(b => b.Package, StringComparer.OrdinalIgnoreCase)
             .ToList();
+    }
+
+    /// <summary>
+    /// For each bump, the project files at the head revision (changed or not)
+    /// that set the package to a version other than the one it's bumped to.
+    /// </summary>
+    static void AddElsewhere(string repoRoot, string headRef, IEnumerable<PackageBump> bumps, Dictionary<string, Dictionary<string, string>> atHead)
+    {
+        var all = (TryGit(repoRoot, "ls-tree", "-r", "--name-only", headRef) ?? "")
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(IsPackageFile)
+            .Order(StringComparer.Ordinal)
+            .ToList();
+        foreach (var bump in bumps)
+        {
+            foreach (var file in all)
+            {
+                if (!atHead.TryGetValue(file, out var versions))
+                    atHead[file] = versions = ReadVersions(TryGit(repoRoot, "show", $"{headRef}:{file}"));
+                if (versions.TryGetValue(bump.Package, out var v) && !string.Equals(v, bump.To, StringComparison.OrdinalIgnoreCase))
+                    (bump.Elsewhere ??= new()).Add(new PinnedVersion { File = file, Version = v });
+            }
+        }
     }
 
     static bool IsPackageFile(string path)
