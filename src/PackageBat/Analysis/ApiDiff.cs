@@ -33,6 +33,7 @@ public static class ApiDiff
             {
                 var newMember = newApi.Resolve(oldType.Name, oldMember.Key);
                 Add(newMember == null ? MemberMissing(oldMember, newApi) : MemberDeprecated(oldMember, newMember));
+                if (newMember != null) Add(OverloadAdded(oldApi, newApi, oldType.Name, oldMember));
             }
 
             // Members the type only inherited from a base in the package: if the base
@@ -233,6 +234,52 @@ public static class ApiDiff
             Subject = oldMember.Display,
             Description = Deprecated(newMember.Deprecated),
         };
+    }
+
+    /// <summary>
+    /// New overloads of <paramref name="oldMember"/> (reached through <paramref name="typeName"/>) that take
+    /// the same number of arguments, so a call that bound to the old member may now be ambiguous or bind to
+    /// the new one when recompiled: a null or lambda argument, a numeric conversion, a new generic or
+    /// <c>params</c> form, or a new extension method of the same name in the same static class.
+    /// Metadata can't say which call sites are affected, so this is a warning to recompile and look.
+    /// </summary>
+    public static ApiChange? OverloadAdded(ApiSurface oldApi, ApiSurface newApi, string typeName, ApiMember oldMember)
+    {
+        if (oldMember.Kind is not (ApiMemberKind.Method or ApiMemberKind.Constructor))
+            return null;
+        int args = oldMember.Parameters.Count;
+        var types = oldMember.Kind == ApiMemberKind.Constructor
+            ? newApi.FindType(typeName) is { } own ? new[] { own } : Array.Empty<ApiType>()
+            : newApi.Hierarchy(typeName);
+        var added = types
+            .SelectMany(t => t.Members)
+            .Where(m => m.Name == oldMember.Name && m.Kind == oldMember.Kind && m.IsStatic == oldMember.IsStatic
+                && m.Key != oldMember.Key && oldApi.Resolve(typeName, m.Key) == null && Accepts(m, args))
+            .Select(m => m.Display)
+            .Distinct()
+            .ToList();
+        if (added.Count == 0)
+            return null;
+        return new ApiChange
+        {
+            Id = $"overload-added:{typeName}::{oldMember.Key}",
+            Kind = ChangeKind.OverloadAdded,
+            Severity = Severity.Warning,
+            TypeName = typeName,
+            MemberKey = oldMember.Key,
+            Subject = oldMember.Display,
+            Description = (added.Count == 1 ? "New overload takes" : $"{added.Count} new overloads take") +
+                " the same number of arguments, so recompiled calls may become ambiguous or pick the new one. Recompile and check",
+            Suggestions = added.Take(5).ToList(),
+        };
+    }
+
+    /// <summary>True when a call with <paramref name="args"/> arguments could bind to <paramref name="m"/>.</summary>
+    static bool Accepts(ApiMember m, int args)
+    {
+        int required = m.Parameters.Count(p => !p.HasDefault && !p.IsParams);
+        bool variadic = m.Parameters.Count > 0 && m.Parameters[^1].IsParams;
+        return args >= required && (variadic || args <= m.Parameters.Count);
     }
 
     /// <summary>

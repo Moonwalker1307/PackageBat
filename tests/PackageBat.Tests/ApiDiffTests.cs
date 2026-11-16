@@ -338,4 +338,39 @@ public class ApiDiffTests
         var ids = ApiDiff.Compute(oldApi, newApi).Changes.Select(c => c.Id.Split('(')[0]).ToList();
         Assert.Equal(new[] { "member-removed:Acme.A::Alpha", "member-removed:Acme.A::Zed", "member-removed:Acme.B::Gone", "member-deprecated:Acme.B::Warn" }, ids);
     }
+
+    [Fact]
+    public void New_overload_with_the_same_argument_count_is_a_warning()
+    {
+        var send = M("Send", ps: P("string"));
+        var c = Single(send, M("Send", ps: P("string")), M("Send", ps: P("System.Uri")));
+        Assert.Equal((ChangeKind.OverloadAdded, Severity.Warning, $"overload-added:{T}::{send.Key}"), (c.Kind, c.Severity, c.Id));
+        Assert.Equal(new[] { "Client.Send(System.Uri)" }, c.Suggestions);
+    }
+
+    [Theory]
+    [InlineData(true)]  // Send(string, int = 0) can take one argument
+    [InlineData(false)] // Send(string, int) cannot
+    public void New_overload_counts_only_when_it_could_take_the_same_arguments(bool optional)
+    {
+        var diff = ApiDiff.Compute(Api(Type(T, M("Send", ps: P("string")))),
+            Api(Type(T, M("Send", ps: P("string")), M("Send", ps: new[] { P("string"), P("int", optional: optional) }))));
+        Assert.Equal(optional, diff.Changes.Any(c => c.Kind == ChangeKind.OverloadAdded));
+    }
+
+    [Fact]
+    public void New_params_overload_counts()
+    {
+        var diff = ApiDiff.Compute(Api(Type(T, M("Send", ps: P("string")))),
+            Api(Type(T, M("Send", ps: P("string")), M("Send", ps: P("object[]", isParams: true)))));
+        Assert.Contains(diff.Changes, c => c.Kind == ChangeKind.OverloadAdded);
+    }
+
+    [Fact]
+    public void Overloads_that_already_existed_or_differ_in_static_are_not_new()
+    {
+        var oldApi = Api(Type(T, M("Send", ps: P("string")), M("Send", ps: P("int"))));
+        var newApi = Api(Type(T, M("Send", ps: P("string")), M("Send", ps: P("int")), M("Send", isStatic: true, ps: P("long"))));
+        Assert.DoesNotContain(ApiDiff.Compute(oldApi, newApi).Changes, c => c.Kind == ChangeKind.OverloadAdded);
+    }
 }

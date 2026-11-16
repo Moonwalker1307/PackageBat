@@ -27,6 +27,13 @@ public enum ChangeKind
     TypeSealed,
     Deprecated,
     /// <summary>
+    /// The new version adds an overload that accepts the same number of
+    /// arguments as a method or constructor the consumer calls. The old binding
+    /// still exists, but recompiled source may now be ambiguous or pick the new
+    /// overload (or a new extension method) instead.
+    /// </summary>
+    OverloadAdded,
+    /// <summary>
     /// The new version loads a module by name at run time (not through a
     /// compile-time reference), and nothing in the consumer's dependencies
     /// provides it. Not an API change, so it has no member and no call site.
