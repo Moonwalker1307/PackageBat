@@ -91,6 +91,8 @@ Run the tests on the PR's **base** commit. That is the code PackageBat analyses,
 
 `XPlat Code Coverage` comes from the `coverlet.collector` package, which `dotnet new xunit`/`nunit`/`mstest` projects already reference. Any Cobertura file works (ReportGenerator, coverage.py, istanbul...), and several files are added up. Paths are matched on their end, so coverage made in another checkout or on another machine still lines up.
 
+**Mocked in tests.** When your test projects' build output is part of `--consumer`, PackageBat also notices tests that replace a changed API's type with a test double: a mocking library's generic argument (`new Mock<IFoo>()`, `Substitute.For<IFoo>()`, `A.Fake<IFoo>()`, from Moq, NSubstitute, FakeItEasy, JustMock or Rhino Mocks) or a class in a test assembly that implements the interface. The *Run by tests* cell then adds "🎭 tests mock `IFoo`" with where, and the summary warns that a passing test there may have run the double instead of the package. Static members and constructors can't be mocked, so they never get this. Coverage adds up all tests, so it means "some test mocks this type", not "this line only ran against a mock".
+
 A covered line is one that ran during the tests. That doesn't prove a test checks what the line does, so treat ✅ as "something would probably have noticed" and ❌ as "nothing will".
 
 ## Use it from the command line

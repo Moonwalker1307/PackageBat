@@ -97,6 +97,19 @@ public sealed class UsedChange
     /// <summary>For type-level changes: the members of that type the code uses.</summary>
     public List<string> MembersUsed { get; set; } = new();
     public List<SourceLocation> Locations { get; set; } = new();
+    /// <summary>
+    /// Where test code replaces the changed API's type with a mock or fake. A
+    /// test that covers a call site may then have run the double, not the package.
+    /// </summary>
+    public List<TestDouble> TestDoubles { get; set; } = new();
+}
+
+/// <summary>One place test code replaces a package type with a mock or fake.</summary>
+public sealed class TestDouble
+{
+    /// <summary>The package type that is replaced.</summary>
+    public string TypeName { get; set; } = "";
+    public SourceLocation Location { get; set; } = new();
 }
 
 public sealed class BlastRadiusReport

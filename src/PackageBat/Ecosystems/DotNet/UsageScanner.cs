@@ -52,7 +52,7 @@ internal static class UsageScanner
                     if (pdb == null)
                         log.WriteLine($"warning: no portable PDB for {dll}; usages will have no file/line.");
                     var before = set.Usages.Count;
-                    new AssemblyScan(r, pdb, name, packageModules, repoRoot, set.Usages).WithBodies(pe).Run();
+                    new AssemblyScan(r, pdb, name, packageModules, repoRoot, set.Usages).WithBodies(pe).WithTestDoubles(References(r)).Run();
                     set.Scanned.Add(Rel(dll, repoRoot));
                     log.WriteLine($"Scanned {name}: {set.Usages.Count - before} references");
                 }
@@ -64,6 +64,25 @@ internal static class UsageScanner
         }
         return set;
     }
+
+    /// <summary>
+    /// Mocking libraries: a package type passed as a generic argument to one of
+    /// their APIs (new Mock&lt;IFoo&gt;(), Substitute.For&lt;IFoo&gt;(), A.Fake&lt;IFoo&gt;())
+    /// is a test double.
+    /// </summary>
+    internal static readonly HashSet<string> MockingAssemblies = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Moq", "NSubstitute", "FakeItEasy", "Telerik.JustMock", "Rhino.Mocks",
+    };
+
+    /// <summary>Test frameworks: a class implementing a package interface in an assembly that references one is a hand-written fake.</summary>
+    internal static readonly HashSet<string> TestFrameworkAssemblies = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "xunit.core", "xunit.v3.core", "nunit.framework", "Microsoft.VisualStudio.TestPlatform.TestFramework", "TUnit.Core",
+    };
+
+    static HashSet<string> References(MetadataReader r) =>
+        r.AssemblyReferences.Select(h => r.GetString(r.GetAssemblyReference(h).Name)).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Expands directories into the assemblies a build produced (those with a PDB next to them).</summary>
     internal static IEnumerable<string> FindAssemblies(IEnumerable<string> paths)
@@ -148,7 +167,10 @@ internal static class UsageScanner
             }
             foreach (var ih in td.GetInterfaceImplementations())
                 if (PackageType(r.GetInterfaceImplementation(ih).Interface) is { } iface)
+                {
                     Emit(iface, null, UsageKind.Implement, LocateType(th), Symbol(th));
+                    if (_test) Emit(iface, null, UsageKind.Mock, LocateType(th), Symbol(th));
+                }
         }
 
         void ScanSignature(MethodDefinitionHandle mh)
@@ -202,6 +224,26 @@ internal static class UsageScanner
         Func<int, MethodBodyBlock?> _peBody = _ => null;
         public AssemblyScan WithBodies(PEReader pe) { _peBody = rva => pe.GetMethodBody(rva); return this; }
 
+        bool _mocking, _test;
+        /// <summary>Also emit Mock usages, when the assembly references a mocking library or a test framework.</summary>
+        public AssemblyScan WithTestDoubles(IReadOnlySet<string> references)
+        {
+            _mocking = references.Any(MockingAssemblies.Contains);
+            _test = _mocking || references.Any(TestFrameworkAssemblies.Contains);
+            return this;
+        }
+
+        /// <summary>True when the handle's type (or generic definition) lives in a mocking library.</summary>
+        bool IsMockingApi(EntityHandle type)
+        {
+            if (!_mocking) return false;
+            var u = MetadataNames.UnderlyingType(r, type);
+            if (u.IsNil || u.Kind != HandleKind.TypeReference) return false;
+            TypeReferenceHandle tr;
+            try { tr = (TypeReferenceHandle)u; } catch (InvalidCastException) { return false; }
+            return MetadataNames.TargetAssembly(r, tr) is { } asm && MockingAssemblies.Contains(asm);
+        }
+
         void HandleToken(int token, MethodDefinitionHandle mh, int offset, IReadOnlyList<SequencePoint> points)
         {
             EntityHandle h = default;
@@ -222,6 +264,14 @@ internal static class UsageScanner
                         : (MemberReferenceHandle)h;
                     if (Member(mrh) is { } m)
                         Emit(m.Type, m.Key, UsageKind.Member, Locate(points, offset, mh), Symbol(mh));
+                    if (IsMockingApi(r.GetMemberReference(mrh).Parent))
+                    {
+                        var doubles = PackageTypesInSpec(r.GetMemberReference(mrh).Parent);
+                        if (h.Kind == HandleKind.MethodSpecification)
+                            doubles = doubles.Concat(PackageTypesInMethodSpec(r.GetMethodSpecification((MethodSpecificationHandle)h)));
+                        foreach (var t in doubles.Distinct())
+                            Emit(t, null, UsageKind.Mock, Locate(points, offset, mh), Symbol(mh));
+                    }
                     // new List<Widget>(): the member is the framework's, but the type argument is the package's.
                     foreach (var t in PackageTypesInSpec(r.GetMemberReference(mrh).Parent))
                         Emit(t, null, UsageKind.Type, Locate(points, offset, mh), Symbol(mh));
