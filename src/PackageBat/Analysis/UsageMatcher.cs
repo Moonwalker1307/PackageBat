@@ -34,11 +34,17 @@ public static class UsageMatcher
         }
 
         var usedApis = new HashSet<string>(StringComparer.Ordinal);
+        var doubles = new List<Usage>();
         foreach (var u in usages.Usages)
         {
             var oldType = oldApi.FindType(u.TypeName);
             if (oldType == null)
                 continue; // not this package's type (or not public in the old version)
+            if (u.Kind == UsageKind.Mock)
+            {
+                doubles.Add(u); // not a reference that can break: it only qualifies what the tests prove
+                continue;
+            }
 
             if (u.Kind == UsageKind.Override || u.Kind == UsageKind.Member)
             {
@@ -89,7 +95,30 @@ public static class UsageMatcher
 
         report.UsedApiCount = usedApis.Count;
         report.Used = Rank(hits.Values.Select(h => new UsedChange { Change = h.Change, Locations = Dedupe(h.Locs), MembersUsed = h.Members.ToList() }));
+        if (doubles.Count > 0)
+            foreach (var u in report.Used)
+                u.TestDoubles = TestDoublesFor(u.Change, oldApi, doubles);
         return report;
+    }
+
+    /// <summary>
+    /// The test doubles that stand in for the changed API: a mock of its type,
+    /// or of a type that inherits it. A double can't replace a static member or a
+    /// constructor (the code under test still calls the package's), so those get none.
+    /// </summary>
+    static List<TestDouble> TestDoublesFor(ApiChange change, ApiSurface oldApi, List<Usage> doubles)
+    {
+        if (change.TypeName.Length == 0) return new();
+        if (change.MemberKey != null && oldApi.Resolve(change.TypeName, change.MemberKey) is { } member
+            && (member.IsStatic || member.Kind == ApiMemberKind.Constructor))
+            return new();
+        return doubles
+            .Where(d => oldApi.Hierarchy(d.TypeName).Any(t => t.Name == change.TypeName))
+            // One per test method: new Mock<IFoo>() and every mock.Setup/Object after it are the same double.
+            .GroupBy(d => (d.TypeName, d.Location.Module, d.Location.Symbol))
+            .Select(g => new TestDouble { TypeName = g.Key.TypeName, Location = g.First().Location })
+            .OrderBy(d => d.Location.File ?? "￿", StringComparer.Ordinal).ThenBy(d => d.Location.Line ?? 0)
+            .ToList();
     }
 
     /// <summary>Most severe first, then the most widely used, then by name.</summary>

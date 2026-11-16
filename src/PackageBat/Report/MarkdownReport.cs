@@ -125,7 +125,7 @@ public static class MarkdownReport
             {
                 var where = u.Locations.Take(MaxLinksInTable).Select(l => Link(l, linkBase)).ToList();
                 if (u.Locations.Count > MaxLinksInTable) where.Add($"+{u.Locations.Count - MaxLinksInTable} more");
-                sb.AppendLine($"| {Icon(u.Change.Severity)} | `{Escape(u.Change.Subject)}` | {Escape(Describe(u.Change))}{(u.MembersUsed.Count > 0 ? Escape($" (you use {string.Join(", ", u.MembersUsed.Take(5))}{(u.MembersUsed.Count > 5 ? ", …" : "")})") : "")} | {string.Join("<br>", where)} |{(coverage ? $" {TestsCell(u.Locations)} |" : "")}");
+                sb.AppendLine($"| {Icon(u.Change.Severity)} | `{Escape(u.Change.Subject)}` | {Escape(Describe(u.Change))}{(u.MembersUsed.Count > 0 ? Escape($" (you use {string.Join(", ", u.MembersUsed.Take(5))}{(u.MembersUsed.Count > 5 ? ", …" : "")})") : "")} | {string.Join("<br>", where)} |{(coverage ? $" {TestsCell(u.Locations)}{MockedCell(u.TestDoubles, linkBase)} |" : "")}");
             }
             sb.AppendLine();
 
@@ -185,8 +185,25 @@ public static class MarkdownReport
             : notCovered == 1 ? "🧪 **The affected call site is never run by your tests.**"
             : $"🧪 **None of the {notCovered} affected call sites are run by your tests.**";
         if (unknown > 0) text += $" {Plural(unknown, "call site has", "call sites have")} no coverage data.";
+        var mocked = p.Used.Where(u => u.TestDoubles.Count > 0).ToList();
+        if (mocked.Count > 0)
+            text += $" 🎭 {(mocked.Count == 1 ? "One changed API is" : $"{mocked.Count} changed APIs are")} on {(mocked.SelectMany(u => u.TestDoubles).Select(d => d.TypeName).Distinct().Count() == 1 ? "a type" : "types")} your tests replace with a mock or fake, so a passing test there may not have run {Escape(p.Package)}'s own code.";
         return text;
     }
+
+    const int MaxMocksInCell = 2;
+
+    static string MockedCell(List<TestDouble> doubles, string? linkBase)
+    {
+        if (doubles.Count == 0) return "";
+        var types = string.Join(", ", doubles.Select(d => d.TypeName).Distinct().Select(t => $"`{Escape(MetadataShortName(t))}`"));
+        var where = doubles.Take(MaxMocksInCell).Select(d => LinkOnly(d.Location, linkBase)).ToList();
+        if (doubles.Count > MaxMocksInCell) where.Add($"+{doubles.Count - MaxMocksInCell} more");
+        return $"<br>🎭 tests mock {types}: {string.Join(", ", where)}";
+    }
+
+    /// <summary>"Ns.Outer+IFoo`1" -> "IFoo`1": the report already says which package it is.</summary>
+    static string MetadataShortName(string typeName) => typeName[(typeName.LastIndexOfAny(new[] { '.', '+' }) + 1)..];
 
     static string TestsCell(List<SourceLocation> locations)
     {
