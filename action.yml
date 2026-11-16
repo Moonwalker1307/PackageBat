@@ -15,6 +15,17 @@ inputs:
   dotnet-version:
     description: .NET SDK version(s) to install, one per line. PackageBat itself needs 8.0 or later; add your own SDK if it differs.
     default: '8.0.x'
+  base-build:
+    description: >-
+      Optional. Path to a checkout of the PR's base commit (its merge base with the PR) that an earlier step in the job
+      already built with PDBs, such as the worktree the coverage step tests. PackageBat then analyses that build instead of
+      building your code a second time. Empty (the default) builds it.
+    default: ''
+  packagebat-version:
+    description: >-
+      Optional. Install this version of the PackageBat tool from nuget.org instead of compiling it from the action's
+      source. Use the version that matches the tag you pin the action to. Empty (the default) compiles it.
+    default: ''
   base-ref:
     description: Git revision to compare against. Defaults to the pull request's base commit.
     default: ''
@@ -73,6 +84,8 @@ runs:
         PB_PROJECT: ${{ inputs.project }}
         PB_BUILD_ARGS: ${{ inputs.build-args }}
         PB_BASE: ${{ inputs.base-ref || github.event.pull_request.base.sha }}
+        PB_BASE_BUILD: ${{ inputs.base-build }}
+        PB_TOOL_VERSION: ${{ inputs.packagebat-version }}
         PB_FAIL_ON: ${{ inputs.fail-on }}
         PB_THRESHOLD: ${{ inputs.threshold }}
         PB_COVERAGE: ${{ inputs.coverage }}

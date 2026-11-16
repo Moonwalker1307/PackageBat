@@ -16,11 +16,18 @@ if [[ -z "${PB_BASE:-}" ]]; then
   exit 1
 fi
 
-echo "::group::Build PackageBat"
-# Build from the action folder so the consumer repo's global.json can't pin an older SDK for us.
-(cd "$GITHUB_ACTION_PATH" && dotnet build src/PackageBat/PackageBat.csproj -c Release -o "$work/tool" -v quiet)
-echo "::endgroup::"
-pb() { dotnet "$work/tool/PackageBat.dll" "$@"; }
+# Run from the action folder so the consumer repo's global.json can't pin an older SDK for us.
+if [[ -n "${PB_TOOL_VERSION:-}" ]]; then
+  echo "::group::Install PackageBat $PB_TOOL_VERSION"
+  (cd "$GITHUB_ACTION_PATH" && dotnet tool install PackageBat --version "$PB_TOOL_VERSION" --tool-path "$work/tool")
+  echo "::endgroup::"
+  pb() { "$work/tool/packagebat" "$@"; }
+else
+  echo "::group::Build PackageBat"
+  (cd "$GITHUB_ACTION_PATH" && dotnet build src/PackageBat/PackageBat.csproj -c Release -o "$work/tool" -v quiet)
+  echo "::endgroup::"
+  pb() { dotnet "$work/tool/PackageBat.dll" "$@"; }
+fi
 
 # Compare against the merge base so commits that landed on the base branch after the PR was opened don't count.
 git fetch --no-tags --quiet origin "$PB_BASE" 2>/dev/null || true
@@ -40,35 +47,46 @@ jq -r '.[] | if .added == true then "  \(.package) \(.to) (added)" else "  \(.pa
 
 # Build the code as it was before the bump. It compiled then, and its assemblies + PDBs
 # tell us exactly which package APIs it binds to and on which lines.
-echo "::group::Build your code at $base (before the bump)"
-git worktree add --detach --force "$work/base" "$base" > /dev/null
-trap 'git worktree remove --force "$work/base" > /dev/null 2>&1 || true' EXIT
-(
-  cd "$work/base"
-  targets=()
-  if [[ -n "${PB_PROJECT:-}" ]]; then
-    targets=("$PB_PROJECT")
-  else
-    # Same lookup as `dotnet build` at the root, then a single solution further down, then every project.
-    mapfile -t targets < <(find . -maxdepth 1 \( -name '*.sln' -o -name '*.slnx' -o -name '*.csproj' -o -name '*.fsproj' -o -name '*.vbproj' \) | sort)
-    if [[ ${#targets[@]} -ne 1 ]]; then
-      mapfile -t targets < <(find . -maxdepth 3 -not -path '*/.*' \( -name '*.sln' -o -name '*.slnx' \) | sort)
-    fi
-    if [[ ${#targets[@]} -ne 1 ]]; then
-      mapfile -t targets < <(find . -not -path '*/.*' \( -name '*.csproj' -o -name '*.fsproj' -o -name '*.vbproj' \) | sort)
-    fi
+consumer="$work/base"
+if [[ -n "${PB_BASE_BUILD:-}" ]]; then
+  # An earlier step already built the base commit (for example to collect coverage): analyse that build.
+  consumer="$(realpath "$PB_BASE_BUILD")"
+  echo "Using the build of the base commit at $consumer"
+  built="$(git -C "$consumer" rev-parse HEAD 2>/dev/null || true)"
+  if [[ "$built" != "$(git rev-parse "$base")" ]]; then
+    echo "::warning::base-build is at ${built:-an unknown commit}, not the merge base $base. Line numbers and links may not match."
   fi
-  if [[ ${#targets[@]} -eq 0 ]]; then
-    echo "::error::No .NET solution or project found. Set the 'project' input."
-    exit 1
-  fi
-  for target in "${targets[@]}"; do
-    echo "dotnet build $target"
-    # shellcheck disable=SC2086 # build-args is intentionally word-split
-    dotnet build "$target" -c Debug -p:DebugType=portable -p:TreatWarningsAsErrors=false ${PB_BUILD_ARGS:-}
-  done
-)
-echo "::endgroup::"
+else
+  echo "::group::Build your code at $base (before the bump)"
+  git worktree add --detach --force "$work/base" "$base" > /dev/null
+  trap 'git worktree remove --force "$work/base" > /dev/null 2>&1 || true' EXIT
+  (
+    cd "$work/base"
+    targets=()
+    if [[ -n "${PB_PROJECT:-}" ]]; then
+      targets=("$PB_PROJECT")
+    else
+      # Same lookup as `dotnet build` at the root, then a single solution further down, then every project.
+      mapfile -t targets < <(find . -maxdepth 1 \( -name '*.sln' -o -name '*.slnx' -o -name '*.csproj' -o -name '*.fsproj' -o -name '*.vbproj' \) | sort)
+      if [[ ${#targets[@]} -ne 1 ]]; then
+        mapfile -t targets < <(find . -maxdepth 3 -not -path '*/.*' \( -name '*.sln' -o -name '*.slnx' \) | sort)
+      fi
+      if [[ ${#targets[@]} -ne 1 ]]; then
+        mapfile -t targets < <(find . -not -path '*/.*' \( -name '*.csproj' -o -name '*.fsproj' -o -name '*.vbproj' \) | sort)
+      fi
+    fi
+    if [[ ${#targets[@]} -eq 0 ]]; then
+      echo "::error::No .NET solution or project found. Set the 'project' input."
+      exit 1
+    fi
+    for target in "${targets[@]}"; do
+      echo "dotnet build $target"
+      # shellcheck disable=SC2086 # build-args is intentionally word-split
+      dotnet build "$target" -c Debug -p:DebugType=portable -p:TreatWarningsAsErrors=false ${PB_BUILD_ARGS:-}
+    done
+  )
+  echo "::endgroup::"
+fi
 
 # Opt-in coverage: expand each line of the input as a glob, relative to the repository root.
 coverage_args=()
@@ -100,8 +118,8 @@ server="${GITHUB_SERVER_URL:-https://github.com}"
 set +e
 pb analyze \
   --bumps "$work/bumps.json" \
-  --consumer "$work/base" \
-  --repo-root "$work/base" \
+  --consumer "$consumer" \
+  --repo-root "$consumer" \
   --link-base "$server/$GITHUB_REPOSITORY/blob/$base" \
   --markdown "$report" \
   --json "$json" \

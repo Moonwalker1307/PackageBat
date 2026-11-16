@@ -43,7 +43,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: Moonwalker1307/PackageBat@main
+      - uses: Moonwalker1307/PackageBat@v0
         with:
           fail-on: breaking   # or 'none' to only comment
 ```
@@ -67,9 +67,28 @@ On every PR that changes a package version (Dependabot, Renovate or by hand) it:
 | `fail-on-license-change` | `false` | `true`: fail when a bumped package, or a dependency it updates, declares a different licence. |
 | `coverage` | | Opt-in. Cobertura coverage file(s) from your tests, one path or glob per line. See [Test coverage](#test-coverage-opt-in). |
 | `comment` | `true` | Post the report as a PR comment. |
+| `base-build` | | Path to a checkout of the base commit that an earlier step already built. PackageBat analyses it instead of building again. See [Cost in CI](#cost-in-ci). |
+| `packagebat-version` | | Install this PackageBat version from nuget.org instead of compiling it from the action's source. |
 | `base-ref` | PR base | What to compare against. |
 
 Outputs: `breaking`, `used-changes`, `license-changes` (packages whose licence changed), `untested` (with `coverage`: affected call sites your tests never run), `report` (Markdown path), `report-json`.
+
+### Pin a version
+
+Point `uses:` at a release tag, not `@main`. `@v0` follows the latest 0.x release. `@v0.2.0` (or a full commit SHA) never moves, which is the safer choice if you want to review every PackageBat update yourself, for example through Dependabot's `github-actions` updates. `@main` is whatever was merged last.
+
+### Cost in CI
+
+A run that finds no package version change stops after reading your project files, and the `paths` filter above keeps the workflow from starting at all on PRs that don't touch them. When there is a bump, the expensive part is building your code at the base commit, a second build next to your normal CI. Two inputs cut that down:
+
+- `base-build`: if an earlier step in the same job already built the base commit (the coverage step below does), pass its folder and PackageBat analyses that build instead of building again.
+- `packagebat-version`: install the published PackageBat tool from nuget.org instead of compiling it from source. Use the version that matches the tag you pin, e.g. `packagebat-version: 0.2.0` with `@v0.2.0`.
+
+`project` limits the build to one solution or project if the default picks up more than the code that uses your packages.
+
+### Pull requests from forks
+
+On `pull_request` events from a fork, GitHub gives the workflow a read-only token, so PackageBat can't post the comment. It logs a warning and the report is still in the job summary, and `fail-on` still fails the check. Dependabot and Renovate PRs in your own repository are not forks and get the comment. If you accept PRs from forks and want the comment there too, set `comment: false`, upload the file named by the `report` output as an artifact, and post it from a separate `workflow_run` workflow, which runs with a write token. Don't switch this workflow to `pull_request_target` instead: that runs with write access and your secrets while PackageBat reads files from the PR.
 
 ### Test coverage (opt-in)
 
@@ -84,9 +103,10 @@ Run the tests on the PR's **base** commit. That is the code PackageBat analyses,
         run: |
           git worktree add "$RUNNER_TEMP/base" "$(git merge-base "$BASE" HEAD)"
           dotnet test "$RUNNER_TEMP/base" --collect "XPlat Code Coverage" --results-directory "$RUNNER_TEMP/coverage"
-      - uses: Moonwalker1307/PackageBat@main
+      - uses: Moonwalker1307/PackageBat@v0
         with:
           coverage: ${{ runner.temp }}/coverage/**/coverage.cobertura.xml
+          base-build: ${{ runner.temp }}/base   # dotnet test already built it, so PackageBat doesn't build again
 ```
 
 `XPlat Code Coverage` comes from the `coverlet.collector` package, which `dotnet new xunit`/`nunit`/`mstest` projects already reference. Any Cobertura file works (ReportGenerator, coverage.py, istanbul...), and several files are added up. Paths are matched on their end, so coverage made in another checkout or on another machine still lines up.
@@ -132,9 +152,19 @@ Changes that don't touch your code are listed in a collapsed section, so you can
 
 **Versions in MSBuild properties.** `<PackageReference Include="Foo" Version="$(FooVersion)" />` (or a central `PackageVersion` that does the same) is resolved the way the project sees it: a property set in the project file itself, else in the nearest `.props`/`.targets` in its folder or a parent folder (`Directory.Build.props`, `Directory.Packages.props`), else in any other `.props`/`.targets` in the repository when every definition there agrees (a shared versions file such as `eng/Versions.props`). Properties built from other properties (`$(FooMajor).4.0`) are followed. A PR that only edits the property counts as a bump of every package that uses it, reported against the project file that references the package. PackageBat doesn't run MSBuild, so a property set under a build-dependent `Condition` (anything but the `'$(Foo)' == ''` default pattern), set on the command line, or computed with a property function is not known, and versions that use it are skipped as before.
 
-**Why compiled code?** The compiler has already resolved overloads, extension methods, generics and implicit conversions, so PackageBat sees exactly which member each line binds to, with no guessing from source text.
+**Why compiled code?** The compiler has already resolved overloads, extension methods, generics and implicit conversions, so PackageBat sees exactly which member each line binds to, with no guessing from source text. The flip side is that it sees the binding against the *old* version; see [What a green report does not tell you](#what-a-green-report-does-not-tell-you).
 
-**Not detected (yet):** behaviour changes behind an unchanged signature; dependency changes forced by something other than the bumped packages' own minimum versions; overrides of members on generic base classes where the signature uses the base's type parameters.
+## What a green report does not tell you
+
+PackageBat compares the two versions' metadata and reads how your *already compiled* code binds to the old one. A report with nothing in it means none of the API changes it can see touch the APIs your code binds to. It does not mean the upgrade is safe. It can't see:
+
+- **Behaviour changes** behind an unchanged signature: different results, new exceptions, changed defaults. Your tests are the check for those, and the [coverage](#test-coverage-opt-in) column shows which affected lines they don't reach.
+- **Source that binds differently after the bump.** The compiler resolved overloads, extension methods and conversions against the old version. A new overload is flagged as a warning (see above), but a new extension method in another class or namespace, a better implicit conversion, or a new generic overload with fewer parameters can change what a line binds to without any warning.
+- **Changed generic constraints** (`where T : class` becoming `where T : IDisposable`) and **nullable annotation changes**. Neither is part of the API PackageBat extracts yet. A tightened constraint can stop code from compiling, and a changed nullable annotation gives new warnings, which fail builds with warnings as errors.
+- **APIs your code reaches by name**: your own reflection (`Type.GetType`, `GetMethod("...")`), DI container registration or scanning by convention, serializers and config binding. There is no compile-time reference to follow, so these usages are invisible. (What the *new package* loads by name is checked, see the table above.)
+- Dependency changes forced by something other than the bumped packages' own minimum versions, and overrides of members on generic base classes where the signature uses the base's type parameters.
+
+Treat a clean report as "nothing obviously breaks at compile time", and still build and test the PR.
 
 ## Other languages
 
