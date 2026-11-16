@@ -37,6 +37,12 @@ public enum UsageKind
     Implement,
     /// <summary>Overrides a virtual member. Scanners may emit candidates; unresolved ones are ignored.</summary>
     Override,
+    /// <summary>
+    /// Test code replaces the type with a test double: a mocking library's
+    /// generic argument (Mock&lt;IFoo&gt;) or a test class implementing the
+    /// interface. Not a reference that can break; it qualifies test coverage.
+    /// </summary>
+    Mock,
 }
 
 public sealed class SourceLocation
