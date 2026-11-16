@@ -108,8 +108,10 @@ public static class MarkdownReport
             if (breaking.Count > 0) parts.Add($"{breaking.Count} breaking");
             var bin = apiUsed.Count(u => u.Change.Severity == Severity.BinaryOnly);
             if (bin > 0) parts.Add($"{bin} fixed by recompiling");
-            var warn = apiUsed.Count(u => u.Change.Severity == Severity.Warning);
+            var overloads = apiUsed.Count(u => u.Change.Kind == ChangeKind.OverloadAdded);
+            var warn = apiUsed.Count(u => u.Change.Severity == Severity.Warning) - overloads;
             if (warn > 0) parts.Add($"{warn} deprecated");
+            if (overloads > 0) parts.Add($"{overloads} with new overloads to recheck");
             sb.AppendLine($"{(breaking.Count > 0 ? "❌" : "⚠️")} **{head}** ({string.Join(", ", parts)})");
             sb.AppendLine();
             if (coverage)
@@ -198,7 +200,12 @@ public static class MarkdownReport
     {
         var text = c.Description;
         if (c.Suggestions.Count > 0)
-            text += c.Kind == ChangeKind.TypeRemoved ? $". See {string.Join(", ", c.Suggestions)}" : $". Now: {string.Join("; ", c.Suggestions.Take(3))}";
+            text += c.Kind switch
+            {
+                ChangeKind.TypeRemoved => $". See {string.Join(", ", c.Suggestions)}",
+                ChangeKind.OverloadAdded => $". New: {string.Join("; ", c.Suggestions.Take(3))}",
+                _ => $". Now: {string.Join("; ", c.Suggestions.Take(3))}",
+            };
         return text;
     }
 
