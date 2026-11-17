@@ -9,7 +9,7 @@ name: Publish
 
 on:
   push:
-    tags: ['v*']
+    tags: ['v*.*.*'] # not the moving major tag (v0), see major-tag.yml
 
 permissions: {}
 

@@ -1,0 +1,85 @@
+name: Move major tag
+
+# When a stable release tag like v0.3.1 is pushed (creating a GitHub release
+# from the UI pushes it too), force-move the major tag (v0) to the same commit,
+# so `uses: Moonwalker1307/PackageBat@v0` follows the latest 0.x release.
+#
+# - Prerelease tags (v0.3.0-beta.1) are skipped.
+# - The major tag only moves forward: tagging v0.2.5 after v0.3.0 leaves v0 on
+#   v0.3.0.
+# - Tags not on main are refused, the same rule publish.yml applies.
+# - Moving v0 does not start publish.yml: that only matches v*.*.* tags, and
+#   pushes made with GITHUB_TOKEN never start other workflows anyway.
+#
+# Run it by hand (Actions > Move major tag > Run workflow) to point the major
+# tag at an existing release, e.g. the first time.
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to point its major tag at, e.g. v0.2.0
+        required: true
+
+permissions: {}
+
+concurrency:
+  group: major-tag
+  cancel-in-progress: false
+
+jobs:
+  move:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # push the major tag
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Move the major tag
+        env:
+          TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          git fetch --force --tags origin
+
+          if ! [[ "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Tag '$TAG' is not v<semver>, e.g. v0.2.0"
+            exit 1
+          fi
+          major="v${BASH_REMATCH[1]}"
+          if [[ -n "${BASH_REMATCH[4]}" ]]; then
+            echo "$TAG is a prerelease; leaving $major where it is."
+            exit 0
+          fi
+
+          if ! sha="$(git rev-parse --verify --quiet "refs/tags/$TAG^{commit}")"; then
+            echo "::error::Tag '$TAG' does not exist"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$sha" origin/main; then
+            echo "::error::Tag '$TAG' points at a commit that is not on main"
+            exit 1
+          fi
+
+          # Highest stable tag in this major series (no prereleases, no build metadata).
+          latest="$(git tag --list "$major.*.*" \
+            | grep -E "^$major\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$" \
+            | sort -V | tail -n 1)"
+          if [[ "$latest" != "$TAG" ]]; then
+            echo "$TAG is older than $latest; leaving $major where it is."
+            exit 0
+          fi
+
+          current="$(git rev-parse --verify --quiet "refs/tags/$major^{commit}" || true)"
+          if [[ "$current" == "$sha" ]]; then
+            echo "$major already points at $TAG ($sha)."
+            exit 0
+          fi
+
+          git tag --force "$major" "$sha"
+          git push --force origin "refs/tags/$major"
+          echo "Moved $major to $TAG ($sha)." >> "$GITHUB_STEP_SUMMARY"
